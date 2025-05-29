@@ -3,6 +3,12 @@
 
 opposite of vagrant, qemu manager
 
+usage:
+
+```
+$ resident.py ~/vm/arch/archlinux-2025.05.01-x86_64.iso
+```
+
 ## uv and pip
 
 ```
