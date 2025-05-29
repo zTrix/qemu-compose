@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import sys
 import logging
 
@@ -71,7 +72,11 @@ def run_archiso(iso_path, log_path=None):
         # echoback will work
         io.print_write = False
 
+        my_term_size = os.get_terminal_size()
+
         cmds = [
+            b"stty rows %d" % my_term_size.lines,
+            b"stty columns %d" % my_term_size.columns,
             b"sed -i -e 's|#PermitRootLogin prohibit-password|PermitRootLogin yes|g' /etc/ssh/sshd_config",
             b"echo _ | passwd root --stdin",
             b"systemctl restart sshd",
