@@ -23,8 +23,10 @@ $ uv pip install --editable ./qemu-package/
  - https://cloud-images.ubuntu.com/releases/plucky/release-20250424/
  - https://wiki.archlinux.org/title/Arch_Linux_on_a_VPS
  - https://github.com/TrinityEmulator/TrinityEmulator/blob/a570269885e296d22e58b14a4a8b100775679b9b/tests/vm/ubuntu.i386
- - 参考 vagrant 里面的 qemu provider 
+ - 参考 vagrant 里面的 qemu provider
+ - https://github.com/hashicorp/vagrant/blob/73db3ce45e946145f6b76d5d73156586381ecb14/plugins/communicators/ssh/communicator.rb#L726
 
 # TODO
 
  - [ ] 使用 qemu 的 kernel 和 initrd 参数来运行跑起来，并把文件系统准备好，而且能够 build 出来最新的
+ - [ ] 处理 qemu package，变成一个可以 import 的目录
