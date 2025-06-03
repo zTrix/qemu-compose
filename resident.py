@@ -4,10 +4,19 @@ import os
 import sys
 import logging
 
+from pyte import ByteStream, Screen
 from qemu.machine import QEMUMachine
 from qemu.machine.machine import AbnormalShutdown
 
 from zio import zio, TTY_RAW, TTY
+
+class Terminal(Screen):
+    def __init__(self, fd, log_path=None):
+        self.fd = fd
+
+        debug_file = open(log_path, "wb") if log_path else None
+        self.io = zio(fd, debug=debug_file)
+
 
 def run_archiso(iso_path, log_path=None):
     logging.basicConfig(level=logging.DEBUG)
@@ -32,8 +41,9 @@ def run_archiso(iso_path, log_path=None):
     try:
         vm.launch()
 
-        debug_file = open(log_path, "wb") if log_path else None
-        io = zio(vm._cons_sock_pair[1], debug=debug_file)
+        term = Terminal(vm._cons_sock_pair[1], log_path)
+
+        term.batch(cmds)
 
         io.read_until(b"Boot the Arch Linux install medium on BIOS.")
         io.write(b"\t")
