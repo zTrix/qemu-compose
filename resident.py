@@ -101,7 +101,6 @@ class Terminal(Screen):
             b"echo _ | passwd root --stdin",
             b"systemctl restart sshd",
             b"echo 'Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch' > /etc/pacman.d/mirrorlist",
-            b"pacman -Sy"
         ]
 
         for cmd in cmds:
@@ -126,6 +125,12 @@ def run_archiso(iso_path, log_path=None):
         # use new network define
         "-netdev", "user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22",
         "-device", "virtio-net,netdev=user.0",
+
+        "-drive", "file=/home/ztx/vm/arch/arch.qcow2,if=virtio,cache=writeback,discard=ignore,format=qcow2",
+
+        "-bios", "/usr/share/ovmf/x64/OVMF.4m.fd",
+        #"-drive", "if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_VARS.4m.fd",
+        #"-drive", "if=pflash,format=raw,file=/home/ztx/vm/arch/OVMF_VARS.fd",
 
         "--drive", "media=cdrom,file=%s,readonly=on" % iso_path,
         "-boot", "once=d",
