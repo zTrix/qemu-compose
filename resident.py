@@ -122,10 +122,13 @@ def run_archiso(iso_path, log_path=None):
         "--enable-kvm",
         "-m", "4G",
         "-smp", "2",
-        "-net", "nic,model=e1000e",
-        "-net", "user,hostfwd=tcp:127.0.0.1:7022-:22,hostname=" + name,
+
+        # use new network define
+        "-netdev", "user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22",
+        "-device", "virtio-net,netdev=user.0",
+
         "--drive", "media=cdrom,file=%s,readonly=on" % iso_path,
-        "-boot", "d",
+        "-boot", "once=d",
     ]
     vm = QEMUMachine(binary, args=args, name=name)
     vm.set_machine("q35")
