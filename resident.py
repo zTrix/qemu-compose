@@ -92,6 +92,8 @@ class Terminal(Screen):
 
         my_term_size = os.get_terminal_size()
 
+        self.resize(my_term_size.lines, my_term_size.columns)
+
         cmds = [
             b"stty rows %d cols %d" % (my_term_size.lines, my_term_size.columns),
             b"sed -i '/#PermitRootLogin/c\PermitRootLogin yes' /etc/ssh/sshd_config",
