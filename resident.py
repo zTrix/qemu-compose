@@ -90,6 +90,24 @@ class Terminal(Screen):
         shell_prompt = b"\x00\x00\x1b[1m\x1b[31mroot\x1b[39m\x1b[0m\x00\x00@archiso \x1b[1m~ \x1b[0m\x00\x00# \x1b[K\x1b[?2004h"
         io.read_until(shell_prompt)
 
+        my_term_size = os.get_terminal_size()
+
+        cmds = [
+            b"stty rows %d cols %d" % (my_term_size.lines, my_term_size.columns),
+            b"sed -i '/#PermitRootLogin/c\PermitRootLogin yes' /etc/ssh/sshd_config",
+            b"sed -i '/#PasswordAuthentication/c\PasswordAuthentication yes' /etc/ssh/sshd_config",
+            b"echo _ | passwd root --stdin",
+            b"systemctl restart sshd",
+            b"echo 'Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch' > /etc/pacman.d/mirrorlist",
+            b"pacman -Sy"
+        ]
+
+        for cmd in cmds:
+            io.write(cmd)
+            io.read_until_timeout(0.1)
+            io.write(b'\r\n')
+            io.read_until(shell_prompt)
+
     def interact(self, buffered:Optional[bytes]=None):
         self.io.interactive(raw_mode=True, buffered=buffered)
 
@@ -121,29 +139,6 @@ def run_archiso(iso_path, log_path=None):
         term.run_batch([])
 
         term.interact()
-
-        # my_term_size = os.get_terminal_size()
-
-        # cmds = [
-        #     b"stty rows %d" % my_term_size.lines,
-        #     b"stty columns %d" % my_term_size.columns,
-        #     b"sed -i -e 's|#PermitRootLogin prohibit-password|PermitRootLogin yes|g' /etc/ssh/sshd_config",
-        #     b"echo _ | passwd root --stdin",
-        #     b"systemctl restart sshd",
-        #     b"echo 'Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch' > /etc/pacman.d/mirrorlist",
-        #     b"pacman -Sy"
-        # ]
-
-        # for cmd in cmds:
-        #     io.write(cmd)
-        #     io.read_until_timeout(0.1)
-        #     io.write(b'\r\n')
-        #     io.read_until(shell_prompt)
-
-        # tty_control_chars_without_cursor_report = tty_control_chars.replace(b'\x1b[6n', b'')
-        # io.interactive(raw_mode=True, buffered=tty_control_chars_without_cursor_report)
-        # if io.is_eof_seen():
-        #     print('vm.is_running = ', vm.is_running())
     except KeyboardInterrupt:
         print("Keyboard interrupt, shutting down vm...")
     finally:
