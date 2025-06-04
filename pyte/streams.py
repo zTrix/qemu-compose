@@ -120,6 +120,7 @@ class Stream:
         esc.RM: "reset_mode",
         esc.SGR: "select_graphic_rendition",
         esc.DSR: "report_device_status",
+        esc.DECSTR: "soft_terminal_reset",
         esc.DECSTBM: "set_margins",
         esc.HPA: "cursor_to_column"
     }
@@ -343,6 +344,8 @@ class Stream:
                         # currently supported.
                         yield None
                         break
+                    elif char == "!":   # FIXME: ignore now, should be soft terminal reset
+                        pass
                     else:
                         params.append(min(int(current or 0), 9999))
 

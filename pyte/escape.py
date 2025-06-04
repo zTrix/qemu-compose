@@ -143,6 +143,8 @@ SGR = "m"
 #: *Device status report*.
 DSR = "n"
 
+DECSTR = "p"
+
 #: *Select top and bottom margins*: Selects margins, defining the
 #: scrolling region; parameters are top and bottom line. If called
 #: without any arguments, whole screen is used.

@@ -12,7 +12,9 @@ from zio import zio, TTY_RAW, TTY, write_debug
 
 class MyStream(ByteStream):
 
-    def __init__(self, *args: Any, **kwargs: Any):
+    def __init__(self, *args: Any, debug=None, **kwargs: Any):
+        self.debug_file = debug
+
         ByteStream.__init__(self, *args, **kwargs)
         self.select_other_charset('@')
 
@@ -30,15 +32,19 @@ class MyStream(ByteStream):
     def flush(self):
         pass
 
+    def debug(self, *args, **kwargs):
+        if self.debug_file:
+            write_debug(self.debug_file, b'MyStream.unknown_escape_sequence(%r, %r)' % (args, kwargs))
+
 class Terminal(Screen):
     def __init__(self, fd, log_path=None):
         Screen.__init__(self, 80, 24)
 
         self.fd = fd
 
-        self.stream = MyStream()
-
         self.debug_file = open(log_path, "wb") if log_path else None
+
+        self.stream = MyStream(debug=self.debug_file)
         self.io = zio(fd, print_write=False, logfile=self.stream, debug=self.debug_file)
 
         self.stream.attach(self)

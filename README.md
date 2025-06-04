@@ -15,6 +15,9 @@ $ resident.py ~/vm/arch/archlinux-2025.05.01-x86_64.iso
 $ uv pip install --editable ./qemu-package/
 ```
 
+## Terminal Control Sequence
+
+ - https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
 
 ## using linux 
 
