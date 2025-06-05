@@ -3,6 +3,7 @@ from typing import List, Optional, Any
 import os
 import sys
 import logging
+import shutil
 
 from pyte import ByteStream, Screen
 from qemu.machine import QEMUMachine
@@ -112,31 +113,60 @@ class Terminal(Screen):
     def interact(self, buffered:Optional[bytes]=None):
         self.io.interactive(raw_mode=True, buffered=buffered)
 
-def run_archiso(iso_path, log_path=None):
+def run(config_path, log_path=None, env_update=None):
     logging.basicConfig(level=logging.DEBUG)
 
-    name = "arch"
-    binary = "/usr/bin/qemu-system-x86_64"
-    args = [
-        "--enable-kvm",
-        "-m", "4G",
-        "-smp", "2",
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
 
-        # use new network define
+    name = config.get('name')
+
+    binary = config.get('binary', shutil.which('qemu-system-x86_64'))
+    if not binary:
+        raise Exception('qemu binary not found')
+
+    default_env = {
+        'PWD': os.path.normpath(os.path.dirname(config_path)),
+    }
+
+    if env_update:
+        default_env.update(env_update)
+
+    default_args = {
+        'cpu': 'max',
+        'machine': 'type=q35,accel=kvm:tcg',
+        'm': '1G',
+        'smp': '1',
+    }
+
+    for block in config.get('args'):
+        for key in block:
+            # FIXME: format has security issues
+            val = block[key].format(**default_env) if block[key] else None
+            if key in default_args:
+                default_args[key] = val
+
+    args = []
+    for key in default_args:
+        args.append('-' + key)
+        args.append(default_args[key])
+
+    args.extend([
+        # use new network definition to add a user network
         "-netdev", "user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22",
         "-device", "virtio-net,netdev=user.0",
+    ])
 
-        "-drive", "file=/home/ztx/vm/arch/arch.qcow2,if=virtio,cache=writeback,discard=ignore,format=qcow2",
+    for block in config.get('args'):
+        for key in block:
+            val = block[key].format(**default_env) if block[key] else None
+            if key in default_args:
+                continue
+            args.append('-' + key)
+            if val is not None:
+                args.append(val)
 
-        "-bios", "/usr/share/ovmf/x64/OVMF.4m.fd",
-        #"-drive", "if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_VARS.4m.fd",
-        #"-drive", "if=pflash,format=raw,file=/home/ztx/vm/arch/OVMF_VARS.fd",
-
-        "--drive", "media=cdrom,file=%s,readonly=on" % iso_path,
-        "-boot", "once=d",
-    ]
     vm = QEMUMachine(binary, args=args, name=name)
-    vm.set_machine("q35")
     vm.add_monitor_null()
     vm.set_qmp_monitor(True)
     vm.set_console(device_type='isa-serial')
@@ -165,4 +195,4 @@ if __name__ == '__main__':
     if len(sys.argv) < 2:
         print('%s /path/to/your-arch-iso' % sys.argv[0])
         sys.exit()
-    run_archiso(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)
+    run(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)
