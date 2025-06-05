@@ -1,0 +1,11 @@
+name: arch__uefi
+args:
+  - # basic
+    smp: '2'
+    m: 4G
+    bios: /usr/share/ovmf/x64/OVMF.4m.fd    # enable UEFI bios
+  - drive: file={PWD}/arch.qcow2,if=virtio,cache=writeback,discard=ignore,format=qcow2
+  - drive: media=cdrom,file={PWD}/archlinux-2025.06.01-x86_64.iso,readonly=on
+  - boot: once=d
+  - netdev: user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22
+  - device: virtio-net,netdev=user.0

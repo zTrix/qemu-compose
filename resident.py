@@ -152,12 +152,6 @@ def run(config_path, log_path=None, env_update=None):
         args.append('-' + key)
         args.append(default_args[key])
 
-    args.extend([
-        # use new network definition to add a user network
-        "-netdev", "user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22",
-        "-device", "virtio-net,netdev=user.0",
-    ])
-
     for block in config.get('args'):
         for key in block:
             val = block[key].format(**default_env) if block[key] else None
