@@ -82,11 +82,10 @@ def main():
     subprocess.run(args, check=True)
     
     with open('/mnt/boot/loader/entries/arch.conf', 'w') as f:
-        f.write('''
-title    Arch Linux
+        f.write('''title    Arch Linux
 linux    /vmlinuz-linux
 initrd   /initramfs-linux.img
-options  root=UUID=%s rw
+options  root=UUID=%s console=ttyS0 rw
 ''' % fs_uuid)
 
     with open('/mnt/etc/hostname', 'w') as f:
