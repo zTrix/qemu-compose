@@ -20,3 +20,8 @@ for line in open(sys.argv[1]):
         buf[1] += ast.literal_eval(line[i+4:-1])
     else:
         continue
+
+if buf[0]:
+    print('<', buf[0])
+if buf[1]:
+    print('>', buf[1])
