@@ -2,6 +2,7 @@
 from typing import List, Optional, Any
 import os
 import sys
+import yaml
 import logging
 import shutil
 
@@ -176,7 +177,7 @@ def run(config_path, log_path=None, env_update=None):
 
         term = Terminal(vm._cons_sock_pair[1], log_path)
 
-        term.run_batch([])
+        # term.run_batch([])
 
         term.interact()
     except KeyboardInterrupt:
