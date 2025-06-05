@@ -13,6 +13,17 @@ from jsonlisp import default_env, interp
 
 from zio import zio, TTY_RAW, TTY, write_debug
 
+class StreamWrapper:
+    def __init__(self, obj):
+        self.obj = obj
+
+    def __getattr__(self, name):
+        return getattr(self.obj, name)
+
+    def write(self, s):
+        if isinstance(s, str):
+            s = s.encode()
+        self.obj.write(s)
 
 class MyStream(ByteStream):
 
@@ -46,7 +57,10 @@ class Terminal(Screen):
 
         self.fd = fd
 
-        self.debug_file = open(log_path, "wb") if log_path else None
+        if isinstance(log_path, str):
+            self.debug_file = open(log_path, "wb") if log_path else None
+        else:
+            self.debug_file = log_path
 
         self.stream = MyStream(debug=self.debug_file)
         self.io = zio(fd, print_write=False, logfile=self.stream, debug=self.debug_file)
@@ -88,7 +102,7 @@ class Terminal(Screen):
         io = self.io
 
         if self.debug_file:
-            write_debug(self.debug_file, b'run_batch: cmds = %s' % cmds)
+            write_debug(self.debug_file, b'run_batch: cmds = %r' % cmds)
 
         transpiled_cmds = ['list'] + cmds
 
@@ -105,7 +119,12 @@ class Terminal(Screen):
         self.io.interactive(raw_mode=True, buffered=buffered)
 
 def run(config_path, log_path=None, env_update=None):
-    logging.basicConfig(level=logging.DEBUG)
+
+    if log_path:
+        debug_file = open(log_path, "wb")
+        logging.basicConfig(level=logging.DEBUG, stream=StreamWrapper(debug_file))
+    else:
+        debug_file = None
 
     config: dict
     with open(config_path) as f:
@@ -160,7 +179,7 @@ def run(config_path, log_path=None, env_update=None):
     try:
         vm.launch()
 
-        term = Terminal(vm._cons_sock_pair[1], log_path)
+        term = Terminal(vm._cons_sock_pair[1], debug_file)
 
         boot_commands = config.get('boot_commands')
         if boot_commands:

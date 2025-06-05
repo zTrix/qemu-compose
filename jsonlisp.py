@@ -163,7 +163,7 @@ def interp(x, env):
                 v = [v]
 
             f = env[k]
-            logger.info('CALL_STEP', f.__name__, v)
+            logger.info('CALL_STEP: %s %s' % (f.__name__, v))
             return f(*v)
 
     if isinstance(x, Symbol):
@@ -207,7 +207,7 @@ def interp(x, env):
         return proc.expand(*args, env=env)
     else:
         args = [interp(exp, env) for exp in args]
-        logger.info('CALL_STEP', proc.__name__, args)
+        logger.info('CALL_STEP: %s %s' % (proc.__name__, args))
         return proc(*args)
 
 
