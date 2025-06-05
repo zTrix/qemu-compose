@@ -9,8 +9,10 @@ import shutil
 from pyte import ByteStream, Screen
 from qemu.machine import QEMUMachine
 from qemu.machine.machine import AbnormalShutdown
+from jsonlisp import default_env, interp
 
 from zio import zio, TTY_RAW, TTY, write_debug
+
 
 class MyStream(ByteStream):
 
@@ -79,37 +81,25 @@ class Terminal(Screen):
         if self.debug_file:
             write_debug(self.debug_file, b'write_process_input: %r -> %r' % (data, v))
 
-    def run_batch(self, ops:List):
+    def run_batch(self, cmds:List):
+        if not isinstance(cmds, list):
+            raise ValueError("cmds must be a list")
+        
         io = self.io
-        io.read_until(b"Boot the Arch Linux install medium on BIOS.")
-        io.write(b"\t")
-        io.read_until(b"initramfs-linux.img")
-        io.write(b" console=ttyS0\n")
 
-        io.read_until(b"archiso login: ")
-        io.write(b"root\r\n")
+        if self.debug_file:
+            write_debug(self.debug_file, b'run_batch: cmds = %s' % cmds)
 
-        shell_prompt = b"\x00\x00\x1b[1m\x1b[31mroot\x1b[39m\x1b[0m\x00\x00@archiso \x1b[1m~ \x1b[0m\x00\x00# \x1b[K\x1b[?2004h"
-        io.read_until(shell_prompt)
+        transpiled_cmds = ['list'] + cmds
 
-        my_term_size = os.get_terminal_size()
+        env = default_env()
+        env['read_until'] = io.read_until
+        env['write'] = io.write
+        env['writeline'] = io.writeline
+        env['wait'] = io.read_until_timeout
+        env['RegExp'] = lambda x: re.compile(x.encode())
 
-        self.resize(my_term_size.lines, my_term_size.columns)
-
-        cmds = [
-            b"stty rows %d cols %d" % (my_term_size.lines, my_term_size.columns),
-            b"sed -i '/#PermitRootLogin/c\PermitRootLogin yes' /etc/ssh/sshd_config",
-            b"sed -i '/#PasswordAuthentication/c\PasswordAuthentication yes' /etc/ssh/sshd_config",
-            b"echo _ | passwd root --stdin",
-            b"systemctl restart sshd",
-            b"echo 'Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch' > /etc/pacman.d/mirrorlist",
-        ]
-
-        for cmd in cmds:
-            io.write(cmd)
-            io.read_until_timeout(0.1)
-            io.write(b'\r\n')
-            io.read_until(shell_prompt)
+        interp(transpiled_cmds, env)
 
     def interact(self, buffered:Optional[bytes]=None):
         self.io.interactive(raw_mode=True, buffered=buffered)
@@ -117,6 +107,7 @@ class Terminal(Screen):
 def run(config_path, log_path=None, env_update=None):
     logging.basicConfig(level=logging.DEBUG)
 
+    config: dict
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
@@ -171,7 +162,9 @@ def run(config_path, log_path=None, env_update=None):
 
         term = Terminal(vm._cons_sock_pair[1], log_path)
 
-        # term.run_batch([])
+        boot_commands = config.get('boot_commands')
+        if boot_commands:
+            term.run_batch(boot_commands)
 
         term.interact()
     except KeyboardInterrupt:
