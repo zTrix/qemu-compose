@@ -85,7 +85,7 @@ def main():
         f.write('''title    Arch Linux
 linux    /vmlinuz-linux
 initrd   /initramfs-linux.img
-options  root=UUID=%s console=ttyS0 rw
+options  root=UUID=%s console=tty0 console=ttyS0 rw
 ''' % fs_uuid)
 
     with open('/mnt/etc/hostname', 'w') as f:
