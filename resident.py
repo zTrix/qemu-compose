@@ -112,7 +112,6 @@ class Terminal(Screen):
         env['writeline'] = io.writeline
         env['wait'] = io.read_until_timeout
         env['RegExp'] = lambda x: re.compile(x.encode())
-        env['key_right'] = "\x1b[C"
 
         interp(transpiled_cmds, env)
 

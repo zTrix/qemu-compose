@@ -129,6 +129,17 @@ std_lib = [
 def default_env():
     env = Env()
     env.update(builtins)
+    env['key_up'] = "\x1b[A"
+    env['key_down'] = "\x1b[B"
+    env['key_right'] = "\x1b[C"
+    env['key_left'] = "\x1b[D"
+    env['key_home'] = "\x1b[H"
+    env['key_end'] = "\x1b[F"
+    env['key_ctrl_space'] = '\x00'
+    env['key_escape'] = '\x1b'
+    env['key_tab'] = '\t'
+    env['key_enter'] = '\n'
+    env['key_backspace'] = '\x7f'
     interp(std_lib, env)
     return env
 
@@ -167,6 +178,8 @@ def interp(x, env):
             return f(*v)
 
     if isinstance(x, Symbol):
+        if x.startswith('key_') and len(x) == 5:
+            return x[4]
         return env[x]
 
     if not isinstance(x, List):
