@@ -10,12 +10,16 @@ args:
   - netdev: user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22
   - device: virtio-net,netdev=user.0
 boot_commands:
-  - wait: 0.2
+  - wait: 0.1
   - read_until: 'Arch Linux install medium'
   - write: "e"
-  - wait: 0.2
-  - write: ["*", ["'", "\x1b[C"], 60]
-  - wait: 0.2
+  - wait: 0.1
+  - write: ["*", "key_right", 60]
+  - wait: 0.1
   - write: " console=ttyS0\r\n"
   - read_until: "\r\narchiso login: "
   - write: "root\r\n"
+pre_script:
+  - qemu_img create -f 
+post_script:
+  - test

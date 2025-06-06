@@ -112,6 +112,7 @@ class Terminal(Screen):
         env['writeline'] = io.writeline
         env['wait'] = io.read_until_timeout
         env['RegExp'] = lambda x: re.compile(x.encode())
+        env['key_right'] = "\x1b[C"
 
         interp(transpiled_cmds, env)
 
@@ -200,6 +201,6 @@ def run(config_path, log_path=None, env_update=None):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print('%s /path/to/your-arch-iso' % sys.argv[0])
+        print('%s /path/to/your-config-file [output-log-path]' % sys.argv[0])
         sys.exit()
     run(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)
