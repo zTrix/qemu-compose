@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-
 import os
+import sys
+import json
 import logging
 import subprocess
 
@@ -39,34 +40,54 @@ def get_fs_uuid(target):
             return name
     return None
 
-def prepare_disk():
-    disk = find_first_disk()
+def get_cmd_output_json(cmd):
+    try:
+        output = subprocess.check_output(cmd, shell=False, text=True)
+        return json.loads(output)
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing command: {e}")
+        return None
+
+def prepare_disk(disk):
+
+    if disk is None:
+        disk = find_first_disk()
+
     logger.info('found first block device %s, do partition...' % disk)
 
     args = ["/usr/bin/env", "parted", "-s", disk, "unit", "s", "mklabel", "gpt", "mkpart", "ESP", "fat32", "2048s", "526335s", "set", "1", "esp", "on", "mkpart", "primary", "ext4", "526336s", "100%", "print"]
     subprocess.run(args, check=True)
 
-    args = ["/usr/bin/env", "mkfs.fat", "-F32", disk + '1']
+    obj = get_cmd_output_json(["/usr/bin/env", "lsblk", "-n", disk, "-J"])
+    disk_parts = obj["blockdevices"][0]["children"]
+    disk_parts.sort(key=lambda x:x['name'])
+
+    disk_part1 = '/dev/' + disk_parts[0]["name"]
+    disk_part2 = '/dev/' + disk_parts[1]["name"]
+    logger.info("found disk parts: %s, %s" % (disk_part1, disk_part2))
+
+    args = ["/usr/bin/env", "mkfs.fat", "-F32", disk_part1]
     subprocess.run(args, check=True)
 
-    args = ["/usr/bin/env", "mkfs.ext4", "-F", "-q", disk + '2']
+    args = ["/usr/bin/env", "mkfs.ext4", "-F", "-q", disk_part2]
     subprocess.run(args, check=True)
 
-    args = ["/usr/bin/env", "mount", disk + '2', "/mnt"]
+    args = ["/usr/bin/env", "mount", disk_part2, "/mnt"]
     subprocess.run(args, check=True)
 
     args = ["/usr/bin/env", "mkdir", "-p", "/mnt/boot"]
     subprocess.run(args, check=True)
 
-    args = ["/usr/bin/env", "mount", disk + '1', "/mnt/boot"]
+    args = ["/usr/bin/env", "mount", disk_part1, "/mnt/boot"]
     subprocess.run(args, check=True)
 
-    return disk
+    return disk, disk_parts
 
-def main():
+def main(disk=None):
     logging.basicConfig(level=logging.INFO)
 
-    disk = prepare_disk()
+    disk, disk_parts = prepare_disk(disk)
+    disk_part2 = '/dev/' + disk_parts[1]["name"]
 
     args = ["/usr/bin/env", "pacstrap", "-K", "/mnt", "base", ]
     subprocess.run(args, check=True)
@@ -74,9 +95,9 @@ def main():
     args = "/usr/bin/env genfstab -U /mnt >> /mnt/etc/fstab"
     subprocess.run(args, check=True, shell=True)
 
-    fs_uuid = get_fs_uuid(disk + '2')
+    fs_uuid = get_fs_uuid(disk_part2)
     if not fs_uuid:
-        raise Exception('uuid not found for %s' % (disk + '2'))
+        raise Exception('uuid not found for %s' % (disk_part2))
 
     args = ["/usr/bin/env", "mkdir", "-p", "/mnt/boot/loader/entries/"]
     subprocess.run(args, check=True)
@@ -95,4 +116,5 @@ options  root=UUID=%s console=tty0 console=ttyS0 rw
     subprocess.run(args, check=True, shell=True)
 
 if __name__ == '__main__':
-    main()
+    disk = sys.argv[1] if len(sys.argv) > 1 else None
+    main(disk=disk)
