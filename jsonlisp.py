@@ -93,6 +93,8 @@ builtins = {
     "apply": lambda proc, args: proc(*args),
     "print": print,
     "literal": ast.literal_eval,
+    "str": str,
+    "format": lambda x, *args: x % tuple(args),
 }
 
 
@@ -220,9 +222,11 @@ def interp(x, env):
         return proc.expand(*args, env=env)
     else:
         args = [interp(exp, env) for exp in args]
-        logger.info('CALL_STEP: %s %s' % (proc.__name__, args))
+        if callable(proc):
+            logger.info('CALL_STEP: %s(%s) %s' % (proc.__name__, proc_or_macro_exp, args))
+        else:
+            logger.error('CALL_STEP:ERROR: function not callable: %s(%s) %s' % (proc, proc_or_macro_exp, args))
         return proc(*args)
-
 
 def repl(prompt=r"{λ}> "):
     env = default_env()

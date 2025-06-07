@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 from typing import List, Optional, Any
 import os
+import re
 import sys
 import yaml
 import logging
 import shutil
+import threading
+from functools import partial
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 from pyte import ByteStream, Screen
 from qemu.machine import QEMUMachine
@@ -12,6 +16,21 @@ from qemu.machine.machine import AbnormalShutdown
 from jsonlisp import default_env, interp
 
 from zio import zio, TTY_RAW, TTY, write_debug
+
+logger = logging.getLogger("resident")
+
+class HttpServer:
+    def __init__(self, listen:str, port:int, root:str):
+        self.listen = listen
+        self.port = port
+        self.root = root
+
+    def start(self):
+        http_handler = partial(SimpleHTTPRequestHandler, directory=self.root)
+        server = ThreadingHTTPServer((self.listen, self.port), http_handler)
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.daemon = True
+        server_thread.start()
 
 class StreamWrapper:
     def __init__(self, obj):
@@ -95,7 +114,7 @@ class Terminal(Screen):
         if self.debug_file:
             write_debug(self.debug_file, b'write_process_input: %r -> %r' % (data, v))
 
-    def run_batch(self, cmds:List):
+    def run_batch(self, cmds:List, env_variables=None):
         if not isinstance(cmds, list):
             raise ValueError("cmds must be a list")
         
@@ -107,16 +126,28 @@ class Terminal(Screen):
         transpiled_cmds = ['list'] + cmds
 
         env = default_env()
+
         env['read_until'] = io.read_until
         env['write'] = io.write
         env['writeline'] = io.writeline
         env['wait'] = io.read_until_timeout
         env['RegExp'] = lambda x: re.compile(x.encode())
 
+        if env_variables:
+            env.update(env_variables)
+
         interp(transpiled_cmds, env)
 
     def interact(self, buffered:Optional[bytes]=None):
         self.io.interactive(raw_mode=True, buffered=buffered)
+
+
+def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
+    value = mapping.get(key)
+    if value:
+        # FIXME: format has security issues
+        return str(value).format(**env)
+    return default
 
 def run(config_path, log_path=None, env_update=None):
 
@@ -135,13 +166,40 @@ def run(config_path, log_path=None, env_update=None):
     binary = config.get('binary', shutil.which('qemu-system-x86_64'))
     if not binary:
         raise Exception('qemu binary not found')
+    
+    cwd = os.path.normpath(os.path.dirname(config_path))
+    term_size = os.get_terminal_size()
 
-    default_env = {
-        'PWD': os.path.normpath(os.path.dirname(config_path)),
+    env = {
+        'PWD': cwd,
+        'CWD': cwd,
+        'GATEWAY_IP': '10.0.2.2',   # qemu user network default gateway ip
+        'TERM_ROWS': term_size.lines,
+        'TERM_COLS': term_size.columns,
     }
 
+    if config.get('env'):
+        for k in config.get('env'):
+            env[k] = config.get('env')[k]
+    
+    http_port = None
+    if config.get('http_serve'):
+        http_serve_config:dict = config.get('http_serve')
+        http_listen = extract_format_or_default(http_serve_config, 'listen', env, default='0.0.0.0')
+        http_port = int(extract_format_or_default(http_serve_config, 'port', env, default=8888))
+        http_root = extract_format_or_default(http_serve_config, 'root', env, default=cwd)
+
+        http_server = HttpServer(http_listen, http_port, http_root)
+        http_server.start()
+        logger.info('HTTP server started on %s:%d, serving %s' % (http_listen, http_port, http_root))
+
+    if http_port is not None:
+        env['HTTP_PORT'] = http_port
+        access_ip = extract_format_or_default(config.get('http_serve'), 'access_ip', env, default=env['GATEWAY_IP']) if config.get('http_serve') else env['GATEWAY_IP']
+        env['HTTP_HOST'] = access_ip
+
     if env_update:
-        default_env.update(env_update)
+        env.update(env_update)
 
     default_args = {
         'cpu': 'max',
@@ -152,8 +210,7 @@ def run(config_path, log_path=None, env_update=None):
 
     for block in config.get('args'):
         for key in block:
-            # FIXME: format has security issues
-            val = block[key].format(**default_env) if block[key] else None
+            val = extract_format_or_default(block, key, env)
             if key in default_args:
                 default_args[key] = val
 
@@ -164,7 +221,7 @@ def run(config_path, log_path=None, env_update=None):
 
     for block in config.get('args'):
         for key in block:
-            val = block[key].format(**default_env) if block[key] else None
+            val = extract_format_or_default(block, key, env)
             if key in default_args:
                 continue
             args.append('-' + key)
@@ -183,20 +240,20 @@ def run(config_path, log_path=None, env_update=None):
 
         boot_commands = config.get('boot_commands')
         if boot_commands:
-            term.run_batch(boot_commands)
+            term.run_batch(boot_commands, env_variables=env)
 
         term.interact()
     except KeyboardInterrupt:
-        print("Keyboard interrupt, shutting down vm...")
+        logger.warning("Keyboard interrupt, shutting down vm...")
     finally:
         try:
             if vm.is_running():
                 vm.shutdown(hard=True)
         except AbnormalShutdown:
-            print('[ EE ] abnormal shutdown exception')
+            logger.error('abnormal shutdown exception')
         finally:
             vm._load_io_log()
-            print('vm.process_io_log = %r' % (vm.get_log(), ))
+            logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:

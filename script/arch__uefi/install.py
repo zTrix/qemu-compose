@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import time
 import json
 import logging
 import subprocess
@@ -53,6 +54,9 @@ def prepare_disk(disk):
     if disk is None:
         disk = find_first_disk()
 
+    if not disk:
+        raise Exception('could not find a disk for installation, aborting')
+
     logger.info('found first block device %s, do partition...' % disk)
 
     args = ["/usr/bin/env", "parted", "-s", disk, "unit", "s", "mklabel", "gpt", "mkpart", "ESP", "fat32", "2048s", "526335s", "set", "1", "esp", "on", "mkpart", "primary", "ext4", "526336s", "100%", "print"]
@@ -88,6 +92,13 @@ def main(disk=None):
 
     disk, disk_parts = prepare_disk(disk)
     disk_part2 = '/dev/' + disk_parts[1]["name"]
+
+    while True:
+        output = subprocess.check_output(['/usr/bin/systemctl', 'show', 'pacman-init.service'], shell=False, text=True)
+        if 'SubState=exited' in output:
+            break
+        print('waiting for pacman-init, sleep 1...')
+        time.sleep(1)
 
     args = ["/usr/bin/env", "pacstrap", "-K", "/mnt", "base", ]
     subprocess.run(args, check=True)
