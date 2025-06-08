@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import json
+import shlex
 import logging
 import subprocess
 
@@ -41,6 +42,13 @@ def get_fs_uuid(target):
             return name
     return None
 
+def run_cmd(cmd, shell=False):
+    if isinstance(cmd, list):
+        print('$ ' + shlex.join(cmd))
+    else:
+        print('$ ' + cmd)
+    subprocess.run(cmd, check=True, shell=shell)
+
 def get_cmd_output_json(cmd):
     try:
         output = subprocess.check_output(cmd, shell=False, text=True)
@@ -60,7 +68,7 @@ def prepare_disk(disk):
     logger.info('found first block device %s, do partition...' % disk)
 
     args = ["/usr/bin/env", "parted", "-s", disk, "unit", "s", "mklabel", "gpt", "mkpart", "ESP", "fat32", "2048s", "526335s", "set", "1", "esp", "on", "mkpart", "primary", "ext4", "526336s", "100%", "print"]
-    subprocess.run(args, check=True)
+    run_cmd(args)
 
     obj = get_cmd_output_json(["/usr/bin/env", "lsblk", "-n", disk, "-J"])
     disk_parts = obj["blockdevices"][0]["children"]
@@ -71,19 +79,19 @@ def prepare_disk(disk):
     logger.info("found disk parts: %s, %s" % (disk_part1, disk_part2))
 
     args = ["/usr/bin/env", "mkfs.fat", "-F32", disk_part1]
-    subprocess.run(args, check=True)
+    run_cmd(args)
 
     args = ["/usr/bin/env", "mkfs.ext4", "-F", "-q", disk_part2]
-    subprocess.run(args, check=True)
+    run_cmd(args)
 
     args = ["/usr/bin/env", "mount", disk_part2, "/mnt"]
-    subprocess.run(args, check=True)
+    run_cmd(args)
 
     args = ["/usr/bin/env", "mkdir", "-p", "/mnt/boot"]
-    subprocess.run(args, check=True)
+    run_cmd(args)
 
     args = ["/usr/bin/env", "mount", disk_part1, "/mnt/boot"]
-    subprocess.run(args, check=True)
+    run_cmd(args)
 
     return disk, disk_parts
 
@@ -101,17 +109,17 @@ def main(disk=None):
         time.sleep(1)
 
     args = ["/usr/bin/env", "pacstrap", "-K", "/mnt", "base", ]
-    subprocess.run(args, check=True)
+    run_cmd(args)
 
     args = "/usr/bin/env genfstab -U /mnt >> /mnt/etc/fstab"
-    subprocess.run(args, check=True, shell=True)
+    run_cmd(args, shell=True)
 
     fs_uuid = get_fs_uuid(disk_part2)
     if not fs_uuid:
         raise Exception('uuid not found for %s' % (disk_part2))
 
     args = ["/usr/bin/env", "mkdir", "-p", "/mnt/boot/loader/entries/"]
-    subprocess.run(args, check=True)
+    run_cmd(args)
     
     with open('/mnt/boot/loader/entries/arch.conf', 'w') as f:
         f.write('''title    Arch Linux
@@ -123,8 +131,8 @@ options  root=UUID=%s console=tty0 console=ttyS0 rw
     with open('/mnt/etc/hostname', 'w') as f:
         f.write('arch\n')
 
-    args = "/usr/bin/env arch-chroot /mnt /bin/bash -c 'pacman -Sy -q --noconfirm linux linux-firmware dhcpcd openssh openresolv netctl && mkinitcpio -p linux && bootctl --path=/boot install && echo _ | passwd root --stdin'"
-    subprocess.run(args, check=True, shell=True)
+    args = "/usr/bin/env arch-chroot /mnt /bin/bash -c 'pacman -Sy -q --noconfirm linux linux-firmware dhcpcd openssh openresolv netctl && mkinitcpio -p linux && bootctl --path=/boot install && echo root:_ | chpasswd'"
+    run_cmd(args, shell=True)
 
 if __name__ == '__main__':
     disk = sys.argv[1] if len(sys.argv) > 1 else None

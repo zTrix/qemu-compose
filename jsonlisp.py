@@ -223,7 +223,8 @@ def interp(x, env):
     else:
         args = [interp(exp, env) for exp in args]
         if callable(proc):
-            logger.info('CALL_STEP: %s(%s) %s' % (proc.__name__, proc_or_macro_exp, args))
+            if proc_or_macro_exp != "begin":
+                logger.info('CALL_STEP: %s(%s) %s' % (proc.__name__, proc_or_macro_exp, args))
         else:
             logger.error('CALL_STEP:ERROR: function not callable: %s(%s) %s' % (proc, proc_or_macro_exp, args))
         return proc(*args)

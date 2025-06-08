@@ -124,7 +124,7 @@ class Terminal(Screen):
         if self.debug_file:
             write_debug(self.debug_file, b'run_batch: cmds = %r' % cmds)
 
-        transpiled_cmds = ['list'] + cmds
+        transpiled_cmds = ['begin'] + cmds
 
         env = default_env()
 
