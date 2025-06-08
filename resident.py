@@ -11,7 +11,6 @@ import subprocess
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
-from pyte import ByteStream, Screen
 from qemu.machine import QEMUMachine
 from qemu.machine.machine import AbnormalShutdown
 from jsonlisp import default_env, interp
@@ -45,36 +44,8 @@ class StreamWrapper:
             s = s.encode()
         self.obj.write(s)
 
-class MyStream(ByteStream):
-
-    def __init__(self, *args: Any, debug=None, **kwargs: Any):
-        self.debug_file = debug
-
-        ByteStream.__init__(self, *args, **kwargs)
-        self.select_other_charset('@')
-
-        self.cursor_pos = None
-
-    def write(self, buf:bytes):
-        self.feed(buf)
-
-        new_pos = (self.listener.cursor.y, self.listener.cursor.x)
-
-        if new_pos != self.cursor_pos:
-            self.listener.render_to(sys.stderr)
-            self.cursor_pos = new_pos
-
-    def flush(self):
-        pass
-
-    def debug(self, *args, **kwargs):
-        if self.debug_file:
-            write_debug(self.debug_file, b'MyStream.unknown_escape_sequence(%r, %r)' % (args, kwargs))
-
-class Terminal(Screen):
+class Terminal(object):
     def __init__(self, fd, log_path=None):
-        Screen.__init__(self, 80, 24)
-
         self.fd = fd
 
         if isinstance(log_path, str):
@@ -82,38 +53,8 @@ class Terminal(Screen):
         else:
             self.debug_file = log_path
 
-        self.stream = MyStream(debug=self.debug_file)
-        self.io = zio(fd, print_write=False, logfile=self.stream, debug=self.debug_file)
+        self.io = zio(fd, print_write=False, logfile=sys.stdout, debug=self.debug_file)
 
-        self.stream.attach(self)
-
-    def render_to(self, target=None, clear_screen=True):
-        if target is None:
-            target = sys.stderr
-
-        if clear_screen:
-            target.write(b"\33[H\33[2J\33[3J".decode('latin-1'))
-
-        for y in range(self.cursor.y):
-            line = self.buffer[y]
-
-            if y < self.cursor.y:
-                for x in range(self.columns):
-                    if line[x].data:
-                        target.write(line[x].data[0])
-                target.write('\r\n')
-            else:
-                for x in range(self.cursor.x):
-                    if line[x].data:
-                        target.write(line[x].data[0])
-
-        target.flush()
-
-    def write_process_input(self, data: str) -> None:
-        v = data.encode('latin-1')
-        self.io.write(v)
-        if self.debug_file:
-            write_debug(self.debug_file, b'write_process_input: %r -> %r' % (data, v))
 
     def run_batch(self, cmds:List, env_variables=None):
         if not isinstance(cmds, list):
