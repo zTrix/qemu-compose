@@ -1,0 +1,13 @@
+name: arch__uefi
+env:
+  shell_prompt: "root\x1b[39m\x1b[0m\x00\x00@archiso \x1b[1m~ \x1b[0m\x00\x00# \x1b[K\x1b[?2004h"
+args:
+  - # basic
+    smp: '2'
+    m: 4G
+    bios: /usr/share/ovmf/x64/OVMF.4m.fd    # enable UEFI bios
+  - drive: file={CWD}/test.qcow2,if=virtio,cache=writeback,discard=ignore,format=qcow2
+  - netdev: user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22
+  - device: virtio-net,netdev=user.0
+boot_commands:
+  - wait: 0.1
