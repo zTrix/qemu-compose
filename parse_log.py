@@ -11,13 +11,17 @@ for line in open(sys.argv[1]):
             print('>', buf[1])
             buf[1] = b''
         i = line.index(' -> ')
-        buf[0] += ast.literal_eval(line[i+4:-1])
+        content = line[i+4:-1].strip()
+        assert (content.startswith('b"') and content.endswith('"')) or (content.startswith("b'") and content.endswith("'"))
+        buf[0] += ast.literal_eval(content)
     elif 'SocketIO.send(' in line:
         if buf[0]:
             print('<', buf[0])
             buf[0] = b''
         i = line.index(' -> ')
-        buf[1] += ast.literal_eval(line[i+4:-1])
+        content = line[i+4:-1].strip()
+        assert (content.startswith('b"') and content.endswith('"')) or (content.startswith("b'") and content.endswith("'"))
+        buf[1] += ast.literal_eval(content)
     else:
         continue
 

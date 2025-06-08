@@ -7,6 +7,7 @@ import yaml
 import logging
 import shutil
 import threading
+import subprocess
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
@@ -132,6 +133,7 @@ class Terminal(Screen):
         env['writeline'] = io.writeline
         env['wait'] = io.read_until_timeout
         env['RegExp'] = lambda x: re.compile(x.encode())
+        env['interact'] = self.interact
 
         if env_variables:
             env.update(env_variables)
@@ -143,7 +145,7 @@ class Terminal(Screen):
 
 
 def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
-    value = mapping.get(key)
+    value = mapping.get(key) if mapping else key
     if value:
         # FIXME: format has security issues
         return str(value).format(**env)
@@ -171,7 +173,6 @@ def run(config_path, log_path=None, env_update=None):
     term_size = os.get_terminal_size()
 
     env = {
-        'PWD': cwd,
         'CWD': cwd,
         'GATEWAY_IP': '10.0.2.2',   # qemu user network default gateway ip
         'TERM_ROWS': term_size.lines,
@@ -181,13 +182,15 @@ def run(config_path, log_path=None, env_update=None):
     if config.get('env'):
         for k in config.get('env'):
             env[k] = config.get('env')[k]
+
+    os.chdir(env['CWD'])
     
     http_port = None
     if config.get('http_serve'):
         http_serve_config:dict = config.get('http_serve')
         http_listen = extract_format_or_default(http_serve_config, 'listen', env, default='0.0.0.0')
         http_port = int(extract_format_or_default(http_serve_config, 'port', env, default=8888))
-        http_root = extract_format_or_default(http_serve_config, 'root', env, default=cwd)
+        http_root = extract_format_or_default(http_serve_config, 'root', env, default=env['CWD'])
 
         http_server = HttpServer(http_listen, http_port, http_root)
         http_server.start()
@@ -200,6 +203,12 @@ def run(config_path, log_path=None, env_update=None):
 
     if env_update:
         env.update(env_update)
+
+    if config.get('before_script'):
+        for line in config.get('before_script'):
+            command = extract_format_or_default(None, line, env)
+            if command:
+                subprocess.run(command.strip(), shell=True, check=True)
 
     default_args = {
         'cpu': 'max',
@@ -241,8 +250,15 @@ def run(config_path, log_path=None, env_update=None):
         boot_commands = config.get('boot_commands')
         if boot_commands:
             term.run_batch(boot_commands, env_variables=env)
+        else:
+            term.interact()
 
-        term.interact()
+        if config.get('after_script'):
+            for line in config.get('after_script'):
+                command = extract_format_or_default(None, line, env)
+                if command:
+                    subprocess.run(command.strip(), shell=True, check=True)
+
     except KeyboardInterrupt:
         logger.warning("Keyboard interrupt, shutting down vm...")
     finally:

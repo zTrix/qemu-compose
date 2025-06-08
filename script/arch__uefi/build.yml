@@ -1,17 +1,20 @@
 name: arch__uefi
 env:
   shell_prompt: "root\x1b[39m\x1b[0m\x00\x00@archiso \x1b[1m~ \x1b[0m\x00\x00# \x1b[K\x1b[?2004h"
+  target: arch__202506-clean-install.qcow2
 http_serve:
   listen: 0.0.0.0
   access_ip: '{GATEWAY_IP}'
   port: 8080
   root: '{CWD}'
+before_script:
+  - qemu-img create -f qcow2 {target} 128G
 args:
   - # basic
     smp: '2'
     m: 4G
     bios: /usr/share/ovmf/x64/OVMF.4m.fd    # enable UEFI bios
-  - drive: file={CWD}/arch.qcow2,if=virtio,cache=writeback,discard=ignore,format=qcow2
+  - drive: file={CWD}/{target},if=virtio,cache=writeback,discard=ignore,format=qcow2
   - drive: media=cdrom,file={CWD}/archlinux-2025.06.01-x86_64.iso,readonly=on
   - boot: once=d
   - netdev: user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22
@@ -30,7 +33,10 @@ boot_commands:
   - write: [format, [quote, "stty rows %d cols %d\r\n"], TERM_ROWS, TERM_COLS]
   - read_until: [str, shell_prompt]
   - write: [format, [quote, "python <(curl -s http://%s:%s/install.py 2>/dev/null)\r\n"], HTTP_HOST, HTTP_PORT]
-pre_script:
-  - qemu_img create -f 
-post_script:
-  - test
+  - read_until: "Random seed file /boot/loader/random-seed successfully written"
+  - write: "umount -R /mnt && systemctl poweroff"
+  # uncomment the following for debugging
+  # - interact: null
+after_script:
+  - echo build {target} job finished
+  - ls -l {target}
