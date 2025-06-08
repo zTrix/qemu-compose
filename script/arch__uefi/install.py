@@ -131,7 +131,7 @@ options  root=UUID=%s console=tty0 console=ttyS0 rw
     with open('/mnt/etc/hostname', 'w') as f:
         f.write('arch\n')
 
-    args = "/usr/bin/env arch-chroot /mnt /bin/bash -c 'pacman -Sy -q --noconfirm linux linux-firmware dhcpcd openssh openresolv netctl && mkinitcpio -p linux && bootctl --path=/boot install && echo root:_ | chpasswd'"
+    args = "/usr/bin/env arch-chroot /mnt /bin/bash -c 'pacman -Sy -q --noconfirm linux linux-firmware dhcpcd openssh openresolv netctl && mkinitcpio -p linux && bootctl --path=/boot install && /bin/bash -c \"echo root:_ | chpasswd\"'"
     run_cmd(args, shell=True)
 
 if __name__ == '__main__':

@@ -240,12 +240,12 @@ def run(config_path, log_path=None, env_update=None):
     vm = QEMUMachine(binary, args=args, name=name)
     vm.add_monitor_null()
     vm.set_qmp_monitor(True)
-    vm.set_console(device_type='isa-serial')
+    vm.set_console(console_chardev='pty', device_type='isa-serial')
 
     try:
         vm.launch()
 
-        term = Terminal(vm._cons_sock_pair[1], debug_file)
+        term = Terminal(vm.console_file, debug_file)
 
         boot_commands = config.get('boot_commands')
         if boot_commands:

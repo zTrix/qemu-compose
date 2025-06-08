@@ -18,6 +18,7 @@ which provides facilities for managing the lifetime of a QEMU VM.
 #
 
 import errno
+import io
 from itertools import chain
 import locale
 import logging
@@ -38,6 +39,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    Union,
 )
 
 from qemu.qmp import SocketAddrT
@@ -46,8 +48,6 @@ from qemu.qmp.legacy import (
     QMPMessage,
     QMPReturnValue,
 )
-
-from . import console_socket
 
 
 LOG = logging.getLogger(__name__)
@@ -312,10 +312,14 @@ class QEMUMachine:
         for _ in range(self._console_index):
             args.extend(['-serial', 'null'])
         if self._console_set:
-            assert self._cons_sock_pair is not None
-            fd = self._cons_sock_pair[0].fileno()
-            chardev = f"socket,id=console,fd={fd}"
+            if self._console_chardev == 'socket':
+                assert self._cons_sock_pair is not None
+                fd = self._cons_sock_pair[0].fileno()
+                chardev = f"socket,id=console,fd={fd}"
+            else:
+                chardev = f"pty,id=console,path={self._cons_sock_pair.name}/0"
             args.extend(['-chardev', chardev])
+
             if self._console_device_type is None:
                 args.extend(['-serial', 'chardev:console'])
             else:
@@ -353,8 +357,12 @@ class QEMUMachine:
             )
 
         if self._console_set:
-            self._cons_sock_pair = socket.socketpair()
-            os.set_inheritable(self._cons_sock_pair[0].fileno(), True)
+            if self._console_chardev == 'socket':
+                self._cons_sock_pair = socket.socketpair()
+                os.set_inheritable(self._cons_sock_pair[0].fileno(), True)
+            else:
+                import tempfile
+                self._cons_sock_pair = tempfile.TemporaryDirectory(prefix='qemu-', suffix='.pts', delete=True)
 
         # NOTE: Make sure any opened resources are *definitely* freed in
         # _post_shutdown()!
@@ -373,8 +381,9 @@ class QEMUMachine:
     def _post_launch(self) -> None:
         if self._sock_pair:
             self._sock_pair[0].close()
-        if self._cons_sock_pair:
-            self._cons_sock_pair[0].close()
+        if self._cons_sock_pair is not None:
+            if isinstance(self._cons_sock_pair, tuple):
+                self._cons_sock_pair[0].close()
 
         if self._qmp_connection:
             if self._sock_pair:
@@ -531,9 +540,10 @@ class QEMUMachine:
             self._console_socket.close()
             self._console_socket = None
 
-        if self._cons_sock_pair:
-            self._cons_sock_pair[0].close()
-            self._cons_sock_pair[1].close()
+        if self._cons_sock_pair is not None:
+            if isinstance(self._cons_sock_pair, tuple):
+                self._cons_sock_pair[0].close()
+                self._cons_sock_pair[1].close()
             self._cons_sock_pair = None
 
     def _hard_shutdown(self) -> None:
@@ -869,6 +879,7 @@ class QEMUMachine:
         self._machine = machine_type
 
     def set_console(self,
+                    console_chardev: Optional[str] = None,
                     device_type: Optional[str] = None,
                     console_index: int = 0) -> None:
         """
@@ -886,6 +897,8 @@ class QEMUMachine:
         machine launch time, as it depends on the temporary directory
         to be created.
 
+        @param console_chardev: the console chardev to use. could be
+                                "socket" or "pty"
         @param device_type: the device type, such as "isa-serial".  If
                             None is given (the default value) a "-serial
                             chardev:console" command line argument will
@@ -897,42 +910,33 @@ class QEMUMachine:
                               the 'null' backing character device.
         """
         self._console_set = True
+        if console_chardev is None:
+            console_chardev = 'socket'
+        self._console_chardev = console_chardev
         self._console_device_type = device_type
         self._console_index = console_index
+    
+    @property
+    def console_fd(self) -> int:
+        if not self._console_set:
+            raise QEMUMachineError("Attempt to access console fd with no connection")
+        
+        if self._console_chardev == 'socket':
+            return self._cons_sock_pair[1].fileno()
+        else:
+            fd = os.open(self._cons_sock_pair.name + '/0', os.O_RDWR)
+            return fd
 
     @property
-    def console_socket(self) -> socket.socket:
-        """
-        Returns a socket connected to the console
-        """
-        if self._console_socket is None:
-            LOG.debug("Opening console socket")
-            if not self._console_set:
-                raise QEMUMachineError(
-                    "Attempt to access console socket with no connection")
-            assert self._cons_sock_pair is not None
-            # os.dup() is used here for sock_fd because otherwise we'd
-            # have two rich python socket objects that would each try to
-            # close the same underlying fd when either one gets garbage
-            # collected.
-            self._console_socket = console_socket.ConsoleSocket(
-                sock_fd=os.dup(self._cons_sock_pair[1].fileno()),
-                file=self._console_log_path,
-                drain=self._drain_console)
-            self._cons_sock_pair[1].close()
-        return self._console_socket
-
-    @property
-    def console_file(self) -> socket.SocketIO:
-        """
-        Returns a file associated with the console socket
-        """
-        if self._console_file is None:
-            LOG.debug("Opening console file")
-            self._console_file = self.console_socket.makefile(mode='rb',
-                                                              buffering=0,
-                                                              encoding='utf-8')
-        return self._console_file
+    def console_file(self) -> Union[socket.socket, io.FileIO]:
+        if not self._console_set:
+            raise QEMUMachineError("Attempt to access console fd with no connection")
+        
+        if self._console_chardev == 'socket':
+            return self._cons_sock_pair[1]
+        else:
+            fd = os.open(self._cons_sock_pair.name + '/0', os.O_RDWR)
+            return os.fdopen(fd, "w+b", buffering=0)
 
     @property
     def temp_dir(self) -> str:
