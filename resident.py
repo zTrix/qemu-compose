@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from typing import List, Optional, Any
+from typing import List, Optional
 import os
 import re
 import sys
@@ -15,7 +15,7 @@ from qemu.machine import QEMUMachine
 from qemu.machine.machine import AbnormalShutdown
 from jsonlisp import default_env, interp
 
-from zio import zio, TTY_RAW, TTY, write_debug
+from zio import zio, write_debug
 
 logger = logging.getLogger("resident")
 
