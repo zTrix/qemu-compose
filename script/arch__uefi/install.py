@@ -34,6 +34,16 @@ def find_first_disk():
 
     return None
 
+def find_first_netlink():
+    links = os.listdir('/sys/class/net/')
+    if not links:
+        return None
+
+    for l in links:
+        if l.startswith('e'):
+            return l
+    return None
+
 def get_fs_uuid(target):
     uuid_map_dir_path = '/dev/disk/by-uuid/'
     for name in os.listdir(uuid_map_dir_path):
@@ -108,6 +118,9 @@ def main(disk=None):
         print('waiting for pacman-init, sleep 1...')
         time.sleep(1)
 
+    with open('/etc/pacman.d/mirrorlist', 'w') as f:
+        f.write('Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch\n')
+
     args = ["/usr/bin/env", "pacstrap", "-K", "/mnt", "base", ]
     run_cmd(args)
 
@@ -133,6 +146,37 @@ options  root=UUID=%s console=tty0 console=ttyS0 rw
 
     args = "/usr/bin/env arch-chroot /mnt /bin/bash -c 'pacman -Sy -q --noconfirm linux linux-firmware dhcpcd openssh openresolv netctl && mkinitcpio -p linux && bootctl --path=/boot install && /bin/bash -c \"echo root:_ | chpasswd -c SHA512\"'"
     run_cmd(args, shell=True)
+
+    args = ["/usr/bin/env", "sed", "-i", '/#PermitRootLogin/c\PermitRootLogin yes', "/mnt/etc/ssh/sshd_config"]
+    run_cmd(args)
+
+    link_name = find_first_netlink()
+    if link_name:
+        with open('/mnt/etc/netctl/%s-dhcp' % link_name, 'w') as f:
+            f.write('''Interface=%s
+Connection=ethernet
+IP=dhcp
+''' % link_name)
+
+    escaped_unit_name = subprocess.check_output(['/usr/bin/systemd-escape', '--template=netctl@.service', link_name + '-dhcp'], shell=False, text=True)
+    if escaped_unit_name:
+        escaped_unit_name = escaped_unit_name.strip()
+
+    os.makedirs('/mnt/etc/systemd/system/multi-user.target.wants/', exist_ok=True)
+    os.makedirs('/mnt/etc/systemd/system/%s.d/' % escaped_unit_name, exist_ok=True)
+
+    with open("/mnt/etc/systemd/system/%s.d/profile.conf" % escaped_unit_name, 'w') as f:
+        f.write('''[Unit]
+BindsTo=sys-subsystem-net-devices-%s.device
+After=sys-subsystem-net-devices-%s.device
+''' % (link_name, link_name))
+
+    args = "/usr/bin/env arch-chroot /mnt /bin/bash -c 'systemctl enable sshd && ln -vs /usr/lib/systemd/system/netctl@.service \"/etc/systemd/system/multi-user.target.wants/%s\"'" % escaped_unit_name
+    run_cmd(args, shell=True)
+
+    run_cmd('sync', shell=True)
+
+    run_cmd('echo __deadbeef__', shell=True)
 
 if __name__ == '__main__':
     disk = sys.argv[1] if len(sys.argv) > 1 else None

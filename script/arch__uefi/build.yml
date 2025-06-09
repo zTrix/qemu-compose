@@ -34,7 +34,10 @@ boot_commands:
   - read_until: [str, shell_prompt]
   - write: [format, [quote, "python <(curl -s http://%s:%s/install.py 2>/dev/null)\r\n"], HTTP_HOST, HTTP_PORT]
   - read_until: "Random seed file /boot/loader/random-seed successfully written"
-  - write: "umount -R /mnt && systemctl poweroff\r\n"
+  # make sure the install script finished
+  - read_until: "__deadbeef__"
+  - wait: 1
+  - write: "sync && umount -R /mnt && systemctl poweroff\r\n"
   # uncomment the following for debugging
   # - interact: null
 after_script:

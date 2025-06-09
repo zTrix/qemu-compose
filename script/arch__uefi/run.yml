@@ -14,7 +14,10 @@ args:
   - netdev: user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22
   - device: virtio-net,netdev=user.0
 boot_commands:
-  - wait: 0.1
+  - read_until: "\r\narch login: "
+  - write: "root\r"
+  - read_until: "\r\nPassword: "
+  - write: "_\r"
   - interact: null
 after_script:
   - ls -l {temp_image}

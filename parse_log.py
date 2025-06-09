@@ -6,7 +6,7 @@ import sys
 buf = [b'', b'']
 
 for line in open(sys.argv[1]):
-    if 'SocketIO.recv(' in line:
+    if 'IO.recv(' in line:
         if buf[1]:
             print('>', buf[1])
             buf[1] = b''
@@ -14,7 +14,7 @@ for line in open(sys.argv[1]):
         content = line[i+4:-1].strip()
         assert (content.startswith('b"') and content.endswith('"')) or (content.startswith("b'") and content.endswith("'"))
         buf[0] += ast.literal_eval(content)
-    elif 'SocketIO.send(' in line:
+    elif 'IO.send(' in line:
         if buf[0]:
             print('<', buf[0])
             buf[0] = b''
