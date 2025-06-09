@@ -1,6 +1,5 @@
 name: arch__uefi
 env:
-  shell_prompt: "root\x1b[39m\x1b[0m\x00\x00@archiso \x1b[1m~ \x1b[0m\x00\x00# \x1b[K\x1b[?2004h"
   base_image: "arch__202506-clean-install.qcow2"
   temp_image: "test_run.qcow2"
 before_script:
@@ -20,5 +19,6 @@ boot_commands:
   - write: "_\r"
   - interact: null
 after_script:
+  - reset -I
   - ls -l {temp_image}
   - bash -c 'read -p "delete temp image file {temp_image}(Y/n)?" choice; case "$choice" in y|Y ) echo "deleting {temp_image}"; rm {temp_image} ;; n|N ) echo "will keep {temp_image}";; * ) echo "invalid choice, do nothing";; esac'

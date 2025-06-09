@@ -7,6 +7,7 @@ import yaml
 import logging
 import shutil
 import threading
+import tty
 import subprocess
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -15,7 +16,7 @@ from qemu.machine import QEMUMachine
 from qemu.machine.machine import AbnormalShutdown
 from jsonlisp import default_env, interp
 
-from zio import zio, write_debug
+from zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
 
 logger = logging.getLogger("resident")
 
@@ -55,35 +56,69 @@ class Terminal(object):
 
         self.io = zio(fd, print_write=False, logfile=sys.stdout, debug=self.debug_file)
 
+        self.term_feed_running = False
+        self.term_feed_drain_thread = None
+
+        if not os.isatty(0):
+            raise Exception('resident.Terminal must run in a UNIX 98 style pty/tty')
+
+    def term_feed_loop(self):
+        logger.info('Terminal.term_feed_loop started...')
+        while self.term_feed_running:
+            r, _, _ = select_ignoring_useless_signal([0], [], [], 0.2)
+
+            if 0 in r:
+                data = os.read(1, 1024)
+                if data:
+                    logger.info('Terminal.term_feed_loop received(%d) -> %s' % (len(data), data))
+                    self.io.write(data)
+
+        logger.info('Terminal.term_feed_loop finished.')
 
     def run_batch(self, cmds:List, env_variables=None):
         if not isinstance(cmds, list):
             raise ValueError("cmds must be a list")
         
-        io = self.io
+        current_tty_mode = tty.tcgetattr(0)
+        ttyraw(0)
 
-        if self.debug_file:
-            write_debug(self.debug_file, b'run_batch: cmds = %r' % cmds)
+        try:
+            self.term_feed_running = True
+            self.term_feed_drain_thread = threading.Thread(target=self.term_feed_loop)
+            self.term_feed_drain_thread.daemon = True
+            self.term_feed_drain_thread.start()
+            
+            io = self.io
 
-        transpiled_cmds = ['begin'] + cmds
+            if self.debug_file:
+                write_debug(self.debug_file, b'run_batch: cmds = %r' % cmds)
 
-        env = default_env()
+            transpiled_cmds = ['begin'] + cmds
 
-        env['read_until'] = io.read_until
-        env['write'] = io.write
-        env['writeline'] = io.writeline
-        env['wait'] = io.read_until_timeout
-        env['RegExp'] = lambda x: re.compile(x.encode())
-        env['interact'] = self.interact
+            env = default_env()
 
-        if env_variables:
-            env.update(env_variables)
+            env['read_until'] = io.read_until
+            env['write'] = io.write
+            env['writeline'] = io.writeline
+            env['wait'] = io.read_until_timeout
+            env['RegExp'] = lambda x: re.compile(x.encode())
+            env['interact'] = self.interact
 
-        interp(transpiled_cmds, env)
+            if env_variables:
+                env.update(env_variables)
 
-    def interact(self, buffered:Optional[bytes]=None):
-        self.io.interactive(raw_mode=True, buffered=buffered)
+            interp(transpiled_cmds, env)
 
+        finally:
+            tty.tcsetattr(0, tty.TCSAFLUSH, current_tty_mode)
+
+    def interact(self, buffered:Optional[bytes]=None, raw_mode=False):
+
+        self.term_feed_running = False
+        if self.term_feed_drain_thread is not None:
+            self.term_feed_drain_thread.join()
+
+        self.io.interactive(raw_mode=raw_mode, buffered=buffered)
 
 def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
     value = mapping.get(key) if mapping else key
@@ -192,7 +227,7 @@ def run(config_path, log_path=None, env_update=None):
         if boot_commands:
             term.run_batch(boot_commands, env_variables=env)
         else:
-            term.interact()
+            term.interact(raw_mode=True)
 
         if config.get('after_script'):
             for line in config.get('after_script'):
