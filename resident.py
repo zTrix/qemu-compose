@@ -68,7 +68,7 @@ class Terminal(object):
             r, _, _ = select_ignoring_useless_signal([0], [], [], 0.2)
 
             if 0 in r:
-                data = os.read(1, 1024)
+                data = os.read(0, 1024)
                 if data:
                     logger.info('Terminal.term_feed_loop received(%d) -> %s' % (len(data), data))
                     self.io.write(data)
@@ -79,7 +79,7 @@ class Terminal(object):
         if not isinstance(cmds, list):
             raise ValueError("cmds must be a list")
         
-        current_tty_mode = tty.tcgetattr(0)
+        current_tty_mode = tty.tcgetattr(0)[:]
         ttyraw(0)
 
         try:
@@ -216,7 +216,7 @@ def run(config_path, log_path=None, env_update=None):
     vm = QEMUMachine(binary, args=args, name=name)
     vm.add_monitor_null()
     vm.set_qmp_monitor(True)
-    vm.set_console(console_chardev='pty', device_type='isa-serial')
+    vm.set_console(console_chardev='socket', device_type='isa-serial')
 
     try:
         vm.launch()
