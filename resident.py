@@ -54,7 +54,7 @@ class Terminal(object):
         else:
             self.debug_file = log_path
 
-        self.io = zio(fd, print_write=False, logfile=sys.stdout, debug=self.debug_file)
+        self.io = zio(fd, print_write=False, logfile=sys.stdout, debug=self.debug_file, timeout=3600)
 
         self.term_feed_running = False
         self.term_feed_drain_thread = None
