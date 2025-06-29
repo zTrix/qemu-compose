@@ -147,7 +147,7 @@ options  root=UUID=%s console=tty0 console=ttyS0 rw
     args = "/usr/bin/env arch-chroot /mnt /bin/bash -c 'pacman -Sy -q --noconfirm linux linux-firmware dhcpcd openssh openresolv netctl && mkinitcpio -p linux && bootctl --path=/boot install && /bin/bash -c \"echo root:_ | chpasswd -c SHA512\"'"
     run_cmd(args, shell=True)
 
-    args = ["/usr/bin/env", "sed", "-i", '/#PermitRootLogin/c\PermitRootLogin yes', "/mnt/etc/ssh/sshd_config"]
+    args = ["/usr/bin/env", "sed", "-i", r'/#PermitRootLogin/c\PermitRootLogin yes', "/mnt/etc/ssh/sshd_config"]
     run_cmd(args)
 
     link_name = find_first_netlink()

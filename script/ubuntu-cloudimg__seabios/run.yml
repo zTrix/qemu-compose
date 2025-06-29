@@ -1,0 +1,33 @@
+name: ubuntu__cloudimg
+env:
+  base_image: "noble-server-cloudimg-amd64.img"
+  temp_image: "test_run.qcow2"
+  http_port: 8080
+http_serve:
+  listen: 0.0.0.0
+  access_ip: '{GATEWAY_IP}'
+  port: '{http_port}'
+  root: '{CWD}/http'
+before_script:
+  - qemu-img create -b {base_image} -f qcow2 -F qcow2 {temp_image}
+args:
+  - # basic
+    smp: '2'
+    m: 4G
+    smbios: type=1,serial=ds=nocloud;s=http://{GATEWAY_IP}:{http_port}/
+  - drive: file={CWD}/{temp_image},if=virtio,cache=writeback,discard=ignore,format=qcow2
+  - netdev: user,id=user.0,hostfwd=tcp:127.0.0.1:1222-:22
+  - device: virtio-net,netdev=user.0
+boot_commands:
+  - wait: 1
+  - read_until: "\nubuntu login: "
+  - write: "ubuntu\r"
+  - read_until: "\nPassword: "
+  - write: "_\r"
+  - read_until: "ubuntu@ubuntu:~$ "
+  - write: "cloud-init status --wait\r"
+  - interact: null
+after_script:
+  - reset -I
+  - ls -l {temp_image}
+  - bash -c 'read -p "delete temp image file {temp_image}(Y/n)?" choice; case "$choice" in y|Y ) echo "deleting {temp_image}"; rm {temp_image} ;; n|N ) echo "will keep {temp_image}";; * ) echo "invalid choice, do nothing";; esac'
