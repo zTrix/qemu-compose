@@ -1,3 +1,7 @@
+
+# NOTE: the following code comes from https://github.com/Leden/jsonlisp with small modification for this project
+# but I have no idea why the original repo is 404 now, so I just leave a comment here to express thanks to Leden
+
 import json
 import logging
 import operator
