@@ -42,8 +42,8 @@ from typing import (
     Union,
 )
 
-from qemu.qmp import SocketAddrT
-from qemu.qmp.legacy import (
+from ..qmp import SocketAddrT
+from ..qmp.legacy import (
     QEMUMonitorProtocol,
     QMPMessage,
     QMPReturnValue,

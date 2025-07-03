@@ -12,11 +12,11 @@ import subprocess
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
-from qemu.machine import QEMUMachine
-from qemu.machine.machine import AbnormalShutdown
-from jsonlisp import default_env, interp
+from .qemu.machine import QEMUMachine
+from .qemu.machine.machine import AbnormalShutdown
+from .jsonlisp import default_env, interp
 
-from zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
+from .zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
 
 logger = logging.getLogger("resident")
 
@@ -247,6 +247,9 @@ def run(config_path, log_path=None, env_update=None):
         finally:
             vm._load_io_log()
             logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
+
+def cli(*args):
+    print(args)
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:

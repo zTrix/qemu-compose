@@ -27,7 +27,7 @@ from typing import (
     Tuple,
 )
 
-from qemu.qmp import SocketAddrT
+from ..qmp import SocketAddrT
 
 from .machine import QEMUMachine
 
