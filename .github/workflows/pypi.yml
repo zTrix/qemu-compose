@@ -14,7 +14,10 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      version: auto
+      version:
+        required: false
+        description: 'version for publish'
+        type: boolean
 
 permissions:
   contents: read
