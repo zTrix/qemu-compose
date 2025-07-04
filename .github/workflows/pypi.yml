@@ -12,6 +12,9 @@ on:
   release:
     types: [published]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      version: auto
 
 permissions:
   contents: read
