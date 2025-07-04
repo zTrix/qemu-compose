@@ -1,5 +1,0 @@
-#cloud-config
-password: _
-chpasswd:
-  expire: False
-

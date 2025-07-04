@@ -248,11 +248,23 @@ def run(config_path, log_path=None, env_update=None):
             vm._load_io_log()
             logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
 
-def cli(*args):
-    print(args)
+def guess_conf_path(p:str | None):
+    if p:
+        return p
+    for f in ["qemu-compose.yml", "qemu-compose.yaml"]:
+        if os.path.exists(f):
+            return f
+    return None
 
-if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print('%s /path/to/your-config-file [output-log-path]' % sys.argv[0])
-        sys.exit()
-    run(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)
+def cli():
+    import argparse
+    parser = argparse.ArgumentParser(description="Define and run QEMU VM with qemu")
+    parser.add_argument('command', type=str, help='command to run')
+    parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
+    args = parser.parse_args()
+    if args.command == "up":
+        conf_path = guess_conf_path(args.file)
+        if not conf_path:
+            print("qemu-compose.yml not found", file=sys.stderr)
+            sys.exit(1)
+        run(conf_path)
