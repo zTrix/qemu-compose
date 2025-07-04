@@ -24,4 +24,4 @@ $ cd ./script/ubuntu-cloudimg__amd64/
 $ qemu-compose up
 ```
 
-![svg](https://github.com/username/repository/blob/main/assets/ubuntu-cloudimg.svg)
+![svg](https://raw.githubusercontent.com/zTrix/qemu-compose/refs/heads/main/assets/ubuntu-cloudimg.svg)
