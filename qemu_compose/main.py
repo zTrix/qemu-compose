@@ -258,7 +258,14 @@ def guess_conf_path(p:str | None):
 
 def cli():
     import argparse
-    parser = argparse.ArgumentParser(description="Define and run QEMU VM with qemu")
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Define and run QEMU VM with qemu",
+        usage="qemu-compose [OPTIONS] COMMAND",
+        epilog="""Commands:
+  up          Create and start QEMU vm
+""",
+    )
     parser.add_argument('command', type=str, help='command to run')
     parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
     args = parser.parse_args()
