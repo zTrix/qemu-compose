@@ -1,0 +1,458 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="2013.17666587" height="989.3330860000001" font-family="Consolas, Menlo, 'Bitstream Vera Sans Mono', monospace, 'Powerline Symbols'" font-size="14px">
+  <style>
+    .br { font-weight: bold }
+    .fa { fill-opacity: 0.5 }
+    .it { font-style: italic }
+    .un { text-decoration: underline }
+  </style>
+
+  <rect width="100%" height="100%" style="fill: #121314" rx="4" ry="4"></rect>
+
+  <svg x="8.42333333" y="9.333331000000001" class="default-text-fill">
+    <g style="shape-rendering: optimizeSpeed">
+
+        <rect x="370.62666652" y="951.999762" width="8.42333333" height="18.666662000000002" style="fill: #d9d9d9"></rect>
+
+
+    </g>
+
+    <text style="fill: #cccccc">
+      <tspan y="0.0">
+        <tspan dy="1em" x="0.0">
+          127.0.0.1 - - [05/Jul/2025 14:48:30] &quot;GET /meta-data HTTP/1.1&quot; 200 -
+        </tspan>
+      </tspan><tspan y="18.666662000000002">
+        <tspan dy="1em" x="0.0">
+          127.0.0.1 - - [05/Jul/2025 14:48:30] &quot;GET /user-data HTTP/1.1&quot; 200 -
+        </tspan>
+      </tspan><tspan y="37.333324000000005">
+        <tspan dy="1em" x="0.0">
+          127.0.0.1 - - [05/Jul/2025 14:48:30] &quot;GET /vendor-data HTTP/1.1&quot; 200 -
+        </tspan>
+      </tspan><tspan y="55.99998600000001">
+        <tspan dy="1em" x="75.80999997">
+          Stopping 
+        </tspan><tspan x="151.61999994" class="br">
+          Enable Persistent Storage in systemd-networkd
+        </tspan><tspan x="530.66999979">
+          ...
+        </tspan>
+      </tspan><tspan y="74.66664800000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Stopped 
+        </tspan><tspan x="143.19666661" class="br">
+          Wait for Network to be Configured
+        </tspan><tspan x="421.1666665">
+          .
+        </tspan>
+      </tspan><tspan y="93.33331000000001">
+        <tspan dy="1em" x="75.80999997">
+          Stopping 
+        </tspan><tspan x="151.61999994" class="br">
+          Wait for Network to be Configured
+        </tspan><tspan x="429.58999983">
+          ...
+        </tspan>
+      </tspan><tspan y="111.99997200000001">
+        <tspan dy="1em" x="75.80999997">
+          Stopping 
+        </tspan><tspan x="151.61999994" class="br">
+          Network Name Resolution
+        </tspan><tspan x="345.35666653">
+          ...
+        </tspan>
+      </tspan><tspan y="130.66663400000002">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Stopped 
+        </tspan><tspan x="143.19666661" class="br">
+          Network Name Resolution
+        </tspan><tspan x="336.9333332">
+          .
+        </tspan>
+      </tspan><tspan y="149.33329600000002">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Stopped 
+        </tspan><tspan x="143.19666661" class="br">
+          Enable Persistent Storage in systemd-networkd
+        </tspan><tspan x="522.24666646">
+          .
+        </tspan>
+      </tspan><tspan y="167.99995800000002">
+        <tspan dy="1em" x="75.80999997">
+          Stopping 
+        </tspan><tspan x="151.61999994" class="br">
+          Network Configuration
+        </tspan><tspan x="328.50999987">
+          ...
+        </tspan>
+      </tspan><tspan y="186.66662000000002">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          Network Name Resolution
+        </tspan><tspan x="345.35666653">
+          ...
+        </tspan>
+      </tspan><tspan y="205.33328200000003">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Stopped 
+        </tspan><tspan x="143.19666661" class="br">
+          Network Configuration
+        </tspan><tspan x="320.08666654">
+          .
+        </tspan>
+      </tspan><tspan y="223.99994400000003">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          Network Configuration
+        </tspan><tspan x="328.50999987">
+          ...
+        </tspan>
+      </tspan><tspan y="242.66660600000003">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          Network Name Resolution
+        </tspan><tspan x="336.9333332">
+          .
+        </tspan>
+      </tspan><tspan y="261.33326800000003">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          Network Configuration
+        </tspan><tspan x="320.08666654">
+          .
+        </tspan>
+      </tspan><tspan y="279.99993">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          Enable Persistent Storage in systemd-networkd
+        </tspan><tspan x="530.66999979">
+          ...
+        </tspan>
+      </tspan><tspan y="298.66659200000004">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          Wait for Network to be Configured
+        </tspan><tspan x="429.58999983">
+          ...
+        </tspan>
+      </tspan><tspan y="317.333254">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Finished 
+        </tspan><tspan x="151.61999994" class="br">
+          Wait for Network to be Configured
+        </tspan><tspan x="429.58999983">
+          .
+        </tspan>
+      </tspan><tspan y="335.99991600000004">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Finished 
+        </tspan><tspan x="151.61999994" class="br">
+          Enable Persistent Storage in systemd-networkd
+        </tspan><tspan x="530.66999979">
+          .
+        </tspan>
+      </tspan><tspan y="354.666578">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="42.11666665">
+          6.670943] cloud-init[426]: 2025-07-05 06:48:29,880 - loggers.py[DEPRECATED]: Deprecated cloud-config provided: chpasswd.list:
+        </tspan><tspan x="1111.87999956">
+          Deprecated in version 22.2. Use **users** instead., system_info:
+        </tspan><tspan x="1667.81999934">
+          Deprecated in version 24.2. System and/
+        </tspan>
+      </tspan><tspan y="373.33324000000005">
+        <tspan dy="1em" x="0.0">
+          or distro specific settings. This is not intended to be overridden by user-data or vendor-data.
+        </tspan>
+      </tspan><tspan y="391.999902">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          Hostname Service
+        </tspan><tspan x="286.39333322">
+          ...
+        </tspan>
+      </tspan><tspan y="410.66656400000005">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          Hostname Service
+        </tspan><tspan x="277.96999989">
+          .
+        </tspan>
+      </tspan><tspan y="429.333226">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="42.11666665">
+          6.888133] cloud-init[426]: 2025-07-05 06:48:30,097 - lifecycle.py[DEPRECATED]: Config key &#39;lists&#39; is deprecated in 22.3 and scheduled to be removed in 27.3. Use &#39;users&#39; instead.
+        </tspan>
+      </tspan><tspan y="447.99988800000006">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="42.11666665">
+          6.890449] cloud-init[426]: 2025-07-05 06:48:30,097 - lifecycle.py[DEPRECATED]: The chpasswd multiline string is deprecated in 22.2 and scheduled to be removed in 27.2. Use string type instead.
+        </tspan>
+      </tspan><tspan y="466.66655000000003">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="42.11666665">
+          6.937681] sh[452]: Completed socket interaction for boot stage network
+        </tspan>
+      </tspan><tspan y="485.33321200000006">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Finished 
+        </tspan><tspan x="151.61999994" class="br">
+          Cloud-init: Network Stage
+        </tspan><tspan x="362.20333319">
+          .
+        </tspan>
+      </tspan><tspan y="503.99987400000003">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          Cloud-config availability
+        </tspan><tspan x="412.74333317">
+          .
+        </tspan>
+      </tspan><tspan y="522.6665360000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          Network is Online
+        </tspan><tspan x="345.35666653">
+          .
+        </tspan>
+      </tspan><tspan y="541.333198">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          Cloud-init: Config Stage
+        </tspan><tspan x="353.77999986000003">
+          ...
+        </tspan>
+      </tspan><tspan y="559.99986">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          Permit User Sessions
+        </tspan><tspan x="320.08666654">
+          ...
+        </tspan>
+      </tspan><tspan y="578.6665220000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Finished 
+        </tspan><tspan x="151.61999994" class="br">
+          Permit User Sessions
+        </tspan><tspan x="320.08666654">
+          .
+        </tspan>
+      </tspan><tspan y="597.3331840000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          Getty on tty1
+        </tspan><tspan x="252.6999999">
+          .
+        </tspan>
+      </tspan><tspan y="615.999846">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          Serial Getty on ttyS0
+        </tspan><tspan x="320.08666654">
+          .
+        </tspan>
+      </tspan><tspan y="634.666508">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          Login Prompts
+        </tspan><tspan x="311.66333321">
+          .
+        </tspan>
+      </tspan><tspan y="653.33317">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="42.11666665">
+          6.991642] cloud-init[426]: Cloud-init v. 25.1.2 running &#39;modules:config&#39; at Sat, 05 Jul 2025 06:48:30 +0000. Up 6.97 seconds.
+        </tspan>
+      </tspan><tspan y="671.9998320000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="42.11666665">
+          7.001472] cloud-init[426]: Generating locales...
+        </tspan>
+      </tspan><tspan y="690.6664940000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="42.11666665">
+          8.106862] cloud-init[426]:
+        </tspan><tspan x="286.39333322">
+          en_US.UTF-8... done
+        </tspan>
+      </tspan><tspan y="709.333156">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="42.11666665">
+          8.107443] cloud-init[426]: Generation complete.
+        </tspan>
+      </tspan><tspan y="727.999818">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          Locale Service
+        </tspan><tspan x="269.54666656">
+          ...
+        </tspan>
+      </tspan><tspan y="746.6664800000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          Locale Service
+        </tspan><tspan x="261.12333323">
+          .
+        </tspan>
+      </tspan><tspan y="765.3331420000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="42.11666665">
+          8.355185] sh[526]: Completed socket interaction for boot stage config
+        </tspan>
+      </tspan><tspan y="783.999804">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Finished 
+        </tspan><tspan x="151.61999994" class="br">
+          Cloud-init: Config Stage
+        </tspan><tspan x="353.77999986000003">
+          .
+        </tspan>
+      </tspan><tspan y="821.3331280000001">
+        <tspan dy="1em" x="0.0">
+          Arch Linux 6.15.4-arch2-1 (ttyS0)
+        </tspan>
+      </tspan><tspan y="858.666452">
+        <tspan dy="1em" x="0.0">
+          archlinux login: root
+        </tspan>
+      </tspan><tspan y="877.333114">
+        <tspan dy="1em" x="0.0">
+          Password:
+        </tspan>
+      </tspan><tspan y="895.9997760000001">
+        <tspan dy="1em" x="0.0">
+          [root@archlinux ~]# stty rows 52 cols 237
+        </tspan>
+      </tspan><tspan y="914.6664380000001">
+        <tspan dy="1em" x="0.0">
+          [root@archlinux ~]#
+        </tspan>
+      </tspan><tspan y="933.3331000000001">
+        <tspan dy="1em" x="0.0">
+          [root@archlinux ~]# cloud-init status --wait
+        </tspan>
+      </tspan><tspan y="951.999762">
+        <tspan dy="1em" x="0.0">
+          ............................................
+        </tspan>
+      </tspan>
+    </text>
+  </svg>
+
+  <g transform="translate(-40 -40)">
+    <svg x="50%" y="50%" width="80" height="80">
+      <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000.0 1000.0" style="filter: drop-shadow(0px 0px 5px rgba(0, 0, 0, 0.4))">
+  <defs>
+    <mask id="small-triangle-mask">
+      <rect width="100%" height="100%" fill="white"></rect>
+      <polygon points="700.0 500.0, 400.00000000000006 326.7949192431122, 399.9999999999999 673.2050807568877" fill="black">
+      </polygon>
+    </mask>
+  </defs>
+  <polygon points="1000.0 500.0, 250.0000000000001 66.98729810778059, 249.99999999999977 933.0127018922192" mask="url(#small-triangle-mask)" fill="white">
+  </polygon>
+  <polyline points="673.2050807568878 400.0, 326.7949192431123 600.0" stroke="white" stroke-width="90">
+  </polyline>
+</svg>
+    </svg>
+  </g>
+</svg>
