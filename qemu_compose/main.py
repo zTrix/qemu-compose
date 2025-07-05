@@ -145,7 +145,7 @@ def run(config_path, log_path=None, env_update=None):
     if not binary:
         raise Exception('qemu binary not found')
     
-    cwd = os.path.normpath(os.path.dirname(config_path))
+    cwd = os.path.normpath(os.path.abspath(os.path.dirname(config_path)))
     term_size = os.get_terminal_size()
 
     env = {
@@ -159,6 +159,7 @@ def run(config_path, log_path=None, env_update=None):
         for k in config.get('env'):
             env[k] = config.get('env')[k]
 
+    logger.info("change directory to %s" % env['CWD'])
     os.chdir(env['CWD'])
     
     http_port = None
@@ -259,9 +260,9 @@ def guess_conf_path(p:str | None):
 def version(short=False):
     version = "v0.6.0"
     if short:
-        print(version)
+        print(version, file=sys.stderr)
     else:
-        print("qemu-compose version %s" % version)
+        print("qemu-compose version %s" % version, file=sys.stderr)
 
 def cli():
     import argparse
@@ -277,13 +278,19 @@ def cli():
     parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
     parser.add_argument("--short", action="store_true", default=False, help="Shows only qemu-compose's version number")
+    parser.add_argument("--log-path", type=str, help="detailed log path")
+    parser.add_argument("--project-directory", type=str, help="Specify an alternate working directory (default: the path of the Compose file)")
     args = parser.parse_args()
 
     if args.command == "version" or args.version:
         version(short=args.short)
     elif args.command == "up":
+        env_update = None
+        if args.project_directory:
+            env_update = {"CWD": args.project_directory}
+
         conf_path = guess_conf_path(args.file)
         if not conf_path:
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
-        run(conf_path)
+        run(conf_path, log_path=args.log_path, env_update=env_update)
