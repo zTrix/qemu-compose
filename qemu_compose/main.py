@@ -18,7 +18,7 @@ from .jsonlisp import default_env, interp
 
 from .zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
 
-logger = logging.getLogger("resident")
+logger = logging.getLogger("qemu-compose")
 
 class HttpServer:
     def __init__(self, listen:str, port:int, root:str):
@@ -60,7 +60,7 @@ class Terminal(object):
         self.term_feed_drain_thread = None
 
         if not os.isatty(0):
-            raise Exception('resident.Terminal must run in a UNIX 98 style pty/tty')
+            raise Exception('qemu-compose.Terminal must run in a UNIX 98 style pty/tty')
 
     def term_feed_loop(self):
         logger.info('Terminal.term_feed_loop started...')
@@ -256,6 +256,13 @@ def guess_conf_path(p:str | None):
             return f
     return None
 
+def version(short=False):
+    version = "v0.6.0"
+    if short:
+        print(version)
+    else:
+        print("qemu-compose version %s" % version)
+
 def cli():
     import argparse
     parser = argparse.ArgumentParser(
@@ -268,8 +275,13 @@ def cli():
     )
     parser.add_argument('command', type=str, help='command to run')
     parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
+    parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
+    parser.add_argument("--short", action="store_true", default=False, help="Shows only qemu-compose's version number")
     args = parser.parse_args()
-    if args.command == "up":
+
+    if args.command == "version" or args.version:
+        version(short=args.short)
+    elif args.command == "up":
         conf_path = guess_conf_path(args.file)
         if not conf_path:
             print("qemu-compose.yml not found", file=sys.stderr)
