@@ -272,6 +272,7 @@ def cli():
         usage="qemu-compose [OPTIONS] COMMAND",
         epilog="""Commands:
   up          Create and start QEMU vm
+  version     Show the qemu-compose version information
 """,
     )
     parser.add_argument('command', type=str, help='command to run')
