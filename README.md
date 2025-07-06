@@ -24,4 +24,6 @@ $ cd ./script/ubuntu-cloudimg__amd64/
 $ qemu-compose up
 ```
 
-![svg](https://raw.githubusercontent.com/zTrix/qemu-compose/refs/heads/main/assets/ubuntu-cloudimg.svg)
+Demo:
+
+[![asciicast](https://raw.githubusercontent.com/zTrix/qemu-compose/refs/heads/main/assets/726386.svg)](https://asciinema.org/a/726386)

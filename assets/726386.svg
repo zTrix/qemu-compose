@@ -1,0 +1,422 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1347.7333328" height="727.999818" font-family="Consolas, Menlo, 'Bitstream Vera Sans Mono', monospace, 'Powerline Symbols'" font-size="14px">
+  <style>
+    .br { font-weight: bold }
+    .fa { fill-opacity: 0.5 }
+    .it { font-style: italic }
+    .un { text-decoration: underline }
+  </style>
+
+  <rect width="100%" height="100%" style="fill: #121314" rx="4" ry="4"></rect>
+
+  <svg x="8.42333333" y="9.333331000000001" class="default-text-fill">
+    <g style="shape-rendering: optimizeSpeed">
+
+        <rect x="0.0" y="690.6664940000001" width="8.42333333" height="18.666662000000002" style="fill: #d9d9d9"></rect>
+
+
+    </g>
+
+    <text style="fill: #cccccc">
+      <tspan y="0.0">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          update-notifier-download.t…
+        </tspan><tspan x="370.62666652">
+          hat failed at package install time.
+        </tspan>
+      </tspan><tspan y="18.666662000000002">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          update-notifier-motd.timer
+        </tspan><tspan x="362.20333319">
+          … a new version of Ubuntu available.
+        </tspan>
+      </tspan><tspan y="37.333324000000005">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          paths.target
+        </tspan><tspan x="311.66333321">
+          - Path Units.
+        </tspan>
+      </tspan><tspan y="55.99998600000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          timers.target
+        </tspan><tspan x="320.08666654">
+          - Timer Units.
+        </tspan>
+      </tspan><tspan y="74.66664800000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Listening on 
+        </tspan><tspan x="185.31333326" class="br">
+          cloud-init-hotplugd.s…t
+        </tspan><tspan x="387.47333318">
+          - cloud-init hotplug hook socket.
+        </tspan>
+      </tspan><tspan y="93.33331000000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Listening on 
+        </tspan><tspan x="185.31333326" class="br">
+          dbus.socket
+        </tspan><tspan x="286.39333322">
+          - D-Bus System Message Bus Socket.
+        </tspan>
+      </tspan><tspan y="111.99997200000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Listening on 
+        </tspan><tspan x="185.31333326" class="br">
+          iscsid.socket
+        </tspan><tspan x="303.23999988">
+          - Open-iSCSI iscsid Socket.
+        </tspan>
+      </tspan><tspan y="130.66663400000002">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          lxd-installer.socket
+        </tspan><tspan x="328.50999987">
+          - He…er to install lxd snap on demand...
+        </tspan>
+      </tspan><tspan y="149.33329600000002">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          snapd.socket
+        </tspan><tspan x="261.12333323">
+          - Socket activation for snappy daemon...
+        </tspan>
+      </tspan><tspan y="167.99995800000002">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Listening on 
+        </tspan><tspan x="185.31333326" class="br">
+          ssh.socket
+        </tspan><tspan x="277.96999989">
+          - OpenBSD Secure Shell server socket.
+        </tspan>
+      </tspan><tspan y="186.66662000000002">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Listening on 
+        </tspan><tspan x="185.31333326" class="br">
+          uuidd.socket
+        </tspan><tspan x="294.81666655">
+          - UUID daemon activation socket.
+        </tspan>
+      </tspan><tspan y="205.33328200000003">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          remote-fs-pre.targe…
+        </tspan><tspan x="370.62666652">
+          reparation for Remote File Systems.
+        </tspan>
+      </tspan><tspan y="223.99994400000003">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          remote-fs.target
+        </tspan><tspan x="345.35666653">
+          - Remote File Systems.
+        </tspan>
+      </tspan><tspan y="242.66660600000003">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Finished 
+        </tspan><tspan x="151.61999994" class="br">
+          blk-availability.service
+        </tspan><tspan x="362.20333319">
+          - Availability of block devices.
+        </tspan>
+      </tspan><tspan y="261.33326800000003">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Listening on 
+        </tspan><tspan x="185.31333326" class="br">
+          lxd-installer.socket
+        </tspan><tspan x="362.20333319">
+          …lper to install lxd snap on demand.
+        </tspan>
+      </tspan><tspan y="279.99993">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Listening on 
+        </tspan><tspan x="185.31333326" class="br">
+          snapd.socket
+        </tspan><tspan x="294.81666655">
+          - Socket activation for snappy daemon.
+        </tspan>
+      </tspan><tspan y="298.66659200000004">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          sockets.target
+        </tspan><tspan x="328.50999987">
+          - Socket Units.
+        </tspan>
+      </tspan><tspan y="317.333254">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          basic.target
+        </tspan><tspan x="311.66333321">
+          - Basic System.
+        </tspan>
+      </tspan><tspan y="335.99991600000004">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          apport.service
+        </tspan><tspan x="277.96999989">
+          - automatic crash report generation...
+        </tspan>
+      </tspan><tspan y="354.666578">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          cloud-config.service
+        </tspan><tspan x="328.50999987">
+          - Cloud-init: Config Stage...
+        </tspan>
+      </tspan><tspan y="373.33324000000005">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          cron.service
+        </tspan><tspan x="252.6999999">
+          - Regular background program processing daemon.
+        </tspan>
+      </tspan><tspan y="391.999902">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          dbus.service
+        </tspan><tspan x="261.12333323">
+          - D-Bus System Message Bus...
+        </tspan>
+      </tspan><tspan y="410.66656400000005">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          dmesg.service
+        </tspan><tspan x="261.12333323">
+          - Save initial kernel messages after boot.
+        </tspan>
+      </tspan><tspan y="429.333226">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          e2scrub_reap.service
+        </tspan><tspan x="328.50999987">
+          - Re…ne ext4 Metadata Check Snapshots...
+        </tspan>
+      </tspan><tspan y="447.99988800000006">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          grub-common.service
+        </tspan><tspan x="320.08666654">
+          - Record successful boot for GRUB...
+        </tspan>
+      </tspan><tspan y="466.66655000000003">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          polkit.service
+        </tspan><tspan x="277.96999989">
+          - Authorization Manager...
+        </tspan>
+      </tspan><tspan y="485.33321200000006">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          pollinate.service
+        </tspan><tspan x="303.23999988">
+          - Polli…e pseudo random number generator...
+        </tspan>
+      </tspan><tspan y="503.99987400000003">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          rsyslog.service
+        </tspan><tspan x="286.39333322">
+          - System Logging Service...
+        </tspan>
+      </tspan><tspan y="522.6665360000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Reached target 
+        </tspan><tspan x="202.15999992000002" class="br">
+          getty-pre.target
+        </tspan><tspan x="345.35666653">
+          - Preparation for Logins.
+        </tspan>
+      </tspan><tspan y="541.333198">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          snapd.seeded.service
+        </tspan><tspan x="328.50999987">
+          - Wait until snapd is fully seeded...
+        </tspan>
+      </tspan><tspan y="559.99986">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          snapd.service
+        </tspan><tspan x="269.54666656">
+          - Snap Daemon...
+        </tspan>
+      </tspan><tspan y="578.6665220000001">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          sysstat.service
+        </tspan><tspan x="286.39333322">
+          - Resets System Activity Logs...
+        </tspan>
+      </tspan><tspan y="597.3331840000001">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          systemd-logind.service
+        </tspan><tspan x="345.35666653">
+          - User Login Management...
+        </tspan>
+      </tspan><tspan y="615.999846">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          systemd-user-sessions.service
+        </tspan><tspan x="404.31999984000004">
+          - Permit User Sessions...
+        </tspan>
+      </tspan><tspan y="634.666508">
+        <tspan dy="1em" x="75.80999997">
+          Starting 
+        </tspan><tspan x="151.61999994" class="br">
+          udisks2.service
+        </tspan><tspan x="286.39333322">
+          - Disk Manager...
+        </tspan>
+      </tspan><tspan y="653.33317">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Started 
+        </tspan><tspan x="143.19666661" class="br">
+          dbus.service
+        </tspan><tspan x="252.6999999">
+          - D-Bus System Message Bus.
+        </tspan>
+      </tspan><tspan y="671.9998320000001">
+        <tspan dy="1em" x="0.0">
+          [
+        </tspan><tspan x="25.269999990000002" style="fill: #4ebf22">
+          OK
+        </tspan><tspan x="58.96333331">
+          ] Finished 
+        </tspan><tspan x="151.61999994" class="br">
+          e2scrub_reap.service
+        </tspan><tspan x="328.50999987">
+          - Re…line ext4 Metadata Check Snapshots.
+        </tspan>
+      </tspan>
+    </text>
+  </svg>
+
+  <g transform="translate(-40 -40)">
+    <svg x="50%" y="50%" width="80" height="80">
+      <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000.0 1000.0" style="filter: drop-shadow(0px 0px 5px rgba(0, 0, 0, 0.4))">
+  <defs>
+    <mask id="small-triangle-mask">
+      <rect width="100%" height="100%" fill="white"></rect>
+      <polygon points="700.0 500.0, 400.00000000000006 326.7949192431122, 399.9999999999999 673.2050807568877" fill="black">
+      </polygon>
+    </mask>
+  </defs>
+  <polygon points="1000.0 500.0, 250.0000000000001 66.98729810778059, 249.99999999999977 933.0127018922192" mask="url(#small-triangle-mask)" fill="white">
+  </polygon>
+  <polyline points="673.2050807568878 400.0, 326.7949192431123 600.0" stroke="white" stroke-width="90">
+  </polyline>
+</svg>
+    </svg>
+  </g>
+</svg>
