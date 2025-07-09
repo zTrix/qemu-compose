@@ -3,16 +3,22 @@
 
 qemu-compose aims to provide a docker-compose style composer for qemu command, with advanced scripting feature as well as http support for cloud init or general purpose provisioning.
 
-bring up a qemu VM by providing a qemu-compose.yml and run `qemu-compose up`
+Bring up a qemu VM by providing a qemu-compose.yml and run `qemu-compose up`
 
 ## Advantages
 
- - Simple and robust
- - No libvirt stuff, no complex
+ - Very simple and robust, written of several pure python scripts, depends on `qemu` commands only.
+ - No libvirt stuff, no daemon process, no xml config, no complex abstraction, just a simple wrapper around qemu args.
  - support `before_script` and `after_script` for setup and cleanup
- - support `boot_commands` for vm provisioning (implemented using jsonlisp for expressive power which apparently is turing-complete)
+ - support `boot_commands` for vm provisioning (implemented using tty communication, gui not supported yet, and use jsonlisp for expressive power which apparently is turing-complete)
  - support `http_serve` for cloudinit
  - env interpolation for advanced configuration
+
+## Installation
+
+```
+$ pip install qemu-compose
+```
 
 ## Examples and Screenshot
 
