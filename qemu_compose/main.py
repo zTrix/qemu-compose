@@ -215,6 +215,11 @@ def run(config_path, log_path=None, env_update=None):
             if val is not None:
                 args.append(val)
 
+    # 自动添加 -name 参数
+    if name:
+        args.append('-name')
+        args.append(name)
+
     vm = QEMUMachine(binary, args=args, name=name)
     vm.add_monitor_null()
     vm.set_qmp_monitor(True)
