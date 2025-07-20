@@ -287,12 +287,10 @@ def cli():
     parser.add_argument("--project-directory", type=str, help="Specify an alternate working directory (default: the path of the Compose file)")
     args = parser.parse_args()
 
-    if args.version:
+    if args.command == "version" or args.version:
         version(short=args.short)
         sys.exit(0)
-    if args.command == "version":
-        version(short=args.short)
-        sys.exit(0)
+
     if not args.command:
         parser.print_help()
         sys.exit(1)
@@ -306,3 +304,6 @@ def cli():
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
         run(conf_path, log_path=args.log_path, env_update=env_update)
+    else:
+        parser.print_help()
+        sys.exit(1)
