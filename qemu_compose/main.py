@@ -215,7 +215,6 @@ def run(config_path, log_path=None, env_update=None):
             if val is not None:
                 args.append(val)
 
-    # 自动添加 -name 参数
     if name:
         args.append('-name')
         args.append(name)
@@ -280,16 +279,21 @@ def cli():
   version     Show the qemu-compose version information
 """,
     )
-    parser.add_argument('command', type=str, help='command to run')
-    parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
     parser.add_argument("--short", action="store_true", default=False, help="Shows only qemu-compose's version number")
+    parser.add_argument('command', type=str, nargs='?', help='command to run')
+    parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
     parser.add_argument("--log-path", type=str, help="detailed log path")
     parser.add_argument("--project-directory", type=str, help="Specify an alternate working directory (default: the path of the Compose file)")
     args = parser.parse_args()
 
     if args.command == "version" or args.version:
         version(short=args.short)
+        sys.exit(0)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
     elif args.command == "up":
         env_update = None
         if args.project_directory:
@@ -300,3 +304,6 @@ def cli():
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
         run(conf_path, log_path=args.log_path, env_update=env_update)
+    else:
+        parser.print_help()
+        sys.exit(1)
