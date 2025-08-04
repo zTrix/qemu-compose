@@ -123,8 +123,10 @@ class Terminal(object):
 def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
     value = mapping.get(key) if mapping else key
     if value:
-        # FIXME: format has security issues
-        return str(value).format(**env)
+        if isinstance(value, list):
+            return [str(v).format(**env) if isinstance(v, str) else v for v in value]
+        else:
+            return str(value).format(**env)
     return default
 
 def run(config_path, log_path=None, env_update=None):
@@ -185,7 +187,12 @@ def run(config_path, log_path=None, env_update=None):
         for line in config.get('before_script'):
             command = extract_format_or_default(None, line, env)
             if command:
-                subprocess.run(command.strip(), shell=True, check=True)
+                if isinstance(command, list):
+                    subprocess.run(command, check=True)
+                elif isinstance(command, str):
+                    subprocess.run(command.strip(), shell=True, check=True)
+                else:
+                    raise ValueError(f"Unsupported command type: {type(command)}")
 
     default_args = {
         'cpu': 'max',
@@ -239,7 +246,12 @@ def run(config_path, log_path=None, env_update=None):
             for line in config.get('after_script'):
                 command = extract_format_or_default(None, line, env)
                 if command:
-                    subprocess.run(command.strip(), shell=True, check=True)
+                    if isinstance(command, list):
+                        subprocess.run(command, check=True)
+                    elif isinstance(command, str):
+                        subprocess.run(command.strip(), shell=True, check=True)
+                    else:
+                        raise ValueError(f"Unsupported command type: {type(command)}")
 
     except KeyboardInterrupt:
         logger.warning("Keyboard interrupt, shutting down vm...")
