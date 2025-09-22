@@ -9,6 +9,8 @@ import shutil
 import threading
 import tty
 import subprocess
+import hashlib
+import urllib.request
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
@@ -127,6 +129,100 @@ def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
         return str(value).format(**env)
     return default
 
+def execute_docker_style_command(command: str, env: dict):
+    parts = command.strip().split()
+    if not parts:
+        return
+    
+    cmd_type = parts[0].upper()
+    
+    if cmd_type == 'DOWNLOAD':
+        if len(parts) < 3:
+            logger.error(f"DOWNLOAD command requires at least URL and filename: {command}")
+            return
+        
+        url = extract_format_or_default(None, parts[1], env)
+        filename = extract_format_or_default(None, parts[2], env)
+        expected_size = extract_format_or_default(None, parts[3], env) if len(parts) > 3 else None
+        
+        logger.info(f"Downloading {url} to {filename}")
+        try:
+            urllib.request.urlretrieve(url, filename)
+            actual_size = os.path.getsize(filename)
+            logger.info(f"Downloaded {filename}, size: {actual_size}")
+            
+            if expected_size and str(actual_size) != expected_size:
+                logger.warning(f"Size mismatch: expected {expected_size}, got {actual_size}")
+                
+        except Exception as e:
+            logger.error(f"Download failed: {e}")
+            raise
+    
+    elif cmd_type == 'VERIFY':
+        if len(parts) < 4:
+            logger.error(f"VERIFY command requires hash_type, filename, and expected_hash: {command}")
+            return
+        
+        hash_type = parts[1].lower()
+        filename = extract_format_or_default(None, parts[2], env)
+        expected_hash = parts[3]
+        
+        if not os.path.exists(filename):
+            logger.error(f"File not found: {filename}")
+            raise FileNotFoundError(f"File not found: {filename}")
+        
+        logger.info(f"Verifying {filename} with {hash_type}")
+        try:
+            with open(filename, 'rb') as f:
+                file_hash = hashlib.new(hash_type, f.read()).hexdigest()
+            
+            if file_hash == expected_hash:
+                logger.info(f"Hash verification passed: {file_hash}")
+            else:
+                logger.error(f"Hash verification failed: expected {expected_hash}, got {file_hash}")
+                raise ValueError(f"Hash verification failed: expected {expected_hash}, got {file_hash}")
+                
+        except Exception as e:
+            logger.error(f"Verification failed: {e}")
+            raise
+    
+    elif cmd_type == 'SHELL':
+        if len(parts) < 2:
+            logger.error(f"SHELL command requires a shell command: {command}")
+            return
+        
+        shell_cmd = ' '.join(parts[1:])
+        shell_cmd = extract_format_or_default(None, shell_cmd, env)
+        
+        logger.info(f"Executing shell command: {shell_cmd}")
+        try:
+            subprocess.run(shell_cmd.strip(), shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Shell command failed: {e}")
+            raise
+    
+    else:
+        command = extract_format_or_default(None, command, env)
+        if command:
+            logger.info(f"Executing command: {command}")
+            subprocess.run(command.strip(), shell=True, check=True)
+
+def execute_script_commands(script_lines, env):
+    if not script_lines:
+        return
+    
+    for line in script_lines:
+        if not line.strip():
+            continue
+        
+        if re.match(r'^[A-Z]+\s', line.strip()):
+            execute_docker_style_command(line, env)
+        else:
+            command = extract_format_or_default(None, line, env)
+            if command:
+                logger.info(f"Executing command: {command}")
+                subprocess.run(command.strip(), shell=True, check=True)
+
 def run(config_path, log_path=None, env_update=None):
 
     if log_path:
@@ -182,10 +278,7 @@ def run(config_path, log_path=None, env_update=None):
         env.update(env_update)
 
     if config.get('before_script'):
-        for line in config.get('before_script'):
-            command = extract_format_or_default(None, line, env)
-            if command:
-                subprocess.run(command.strip(), shell=True, check=True)
+        execute_script_commands(config.get('before_script'), env)
 
     default_args = {
         'cpu': 'max',
@@ -236,10 +329,7 @@ def run(config_path, log_path=None, env_update=None):
             term.interact(raw_mode=True)
 
         if config.get('after_script'):
-            for line in config.get('after_script'):
-                command = extract_format_or_default(None, line, env)
-                if command:
-                    subprocess.run(command.strip(), shell=True, check=True)
+            execute_script_commands(config.get('after_script'), env)
 
     except KeyboardInterrupt:
         logger.warning("Keyboard interrupt, shutting down vm...")
@@ -253,7 +343,7 @@ def run(config_path, log_path=None, env_update=None):
             vm._load_io_log()
             logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
 
-def guess_conf_path(p:str | None):
+def guess_conf_path(p: Optional[str]):
     if p:
         return p
     for f in ["qemu-compose.yml", "qemu-compose.yaml"]:
