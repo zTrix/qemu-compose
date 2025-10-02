@@ -9,6 +9,7 @@ import shutil
 import threading
 import tty
 import subprocess
+import signal
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
@@ -61,6 +62,13 @@ class Terminal(object):
 
         if not os.isatty(0):
             raise Exception('qemu-compose.Terminal must run in a UNIX 98 style pty/tty')
+        else:
+            signal.signal(signal.SIGWINCH, self.handle_resize)
+
+    def handle_resize(self, signum, frame):
+        height, width = os.get_terminal_size(0)
+        logger.info("try set terminal window size to %dx%d" % (width, height))
+        # TODO: use qmp to set console window size
 
     def term_feed_loop(self):
         logger.info('Terminal.term_feed_loop started...')
@@ -189,10 +197,10 @@ def run(config_path, log_path=None, env_update=None):
 
     default_args = {
         'cpu': 'max',
-        'machine': 'type=q35',
+        'machine': 'type=q35,hpet=off',
         'accel': 'kvm',
         'm': '1G',
-        'smp': '1',
+        'smp': str(os.cpu_count()),
     }
 
     for block in config.get('args'):
