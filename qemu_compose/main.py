@@ -189,7 +189,7 @@ def run(config_path, log_path=None, env_update=None):
 
     default_args = {
         'cpu': 'max',
-        'machine': 'type=q35',
+        'machine': 'type=q35,hpet=off',
         'accel': 'kvm',
         'm': '1G',
         'smp': '1',
