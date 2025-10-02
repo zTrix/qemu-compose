@@ -16,6 +16,8 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from .qemu.machine import QEMUMachine
 from .qemu.machine.machine import AbnormalShutdown
 from .jsonlisp import default_env, interp
+from .local_store import LocalStore
+from .vsock import get_available_guest_cid
 
 from .zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
 
@@ -136,6 +138,12 @@ def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
     return default
 
 def run(config_path, log_path=None, env_update=None):
+    cid = get_available_guest_cid(1000)
+    if cid is None:
+        raise Exception("no available guest cid found, please make sure vhost_vsock module loaded")
+
+    store = LocalStore()
+    vmid = store.new_random_vmid()
 
     if log_path:
         debug_file = open(log_path, "wb")
@@ -226,6 +234,10 @@ def run(config_path, log_path=None, env_update=None):
     if name:
         args.append('-name')
         args.append(name)
+
+    if cid:
+        args.append("-device")
+        args.append("vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=%d" % cid)
 
     vm = QEMUMachine(binary, args=args, name=name)
     vm.add_monitor_null()
