@@ -299,6 +299,8 @@ def run(config_path, log_path=None, env_update=None):
                 f.write(str(cid))
             with open(os.path.join(instance_dir, "name"), "w") as f:
                 f.write(str(name) if name is not None else "")
+            with open(os.path.join(instance_dir, "instance-id"), "w") as f:
+                f.write(str(vmid))
         except Exception as e:
             logger.warning("failed to write instance metadata: %s", e)
 
