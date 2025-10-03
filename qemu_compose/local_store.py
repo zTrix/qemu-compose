@@ -1,9 +1,11 @@
 
+import base64
+import os
 import random
 import string
-import os
+import struct
 
-from Crypto.PublicKey import Ed25519
+from Crypto.PublicKey import ECC
 
 def build_openssh_pub_from_raw(raw32: bytes) -> str:
     def _pack_ssh_string(b: bytes) -> bytes:
@@ -50,31 +52,31 @@ class LocalStore:
                 return vmid
 
     def instance_ssh_key_pub_path(self, vmid:str):
-        return os.path.join(instance_dir, "ssh-key.pub")
+        return os.path.join(self.instance_dir(vmid), "ssh-key.pub")
 
     def instance_ssh_key_path(self, vmid:str):
-        return os.path.join(instance_dir, "ssh-key")
+        return os.path.join(self.instance_dir(vmid), "ssh-key")
 
     def prepare_ssh_key(self, vmid:str):
         priv_key_path = self.instance_ssh_key_path(vmid)
         pub_key_path = self.instance_ssh_key_pub_path(vmid)
 
         # create new key pair using PyCryptodome
-        key = Ed25519.generate()
+        key = ECC.generate(curve='ed25519')
         priv_pem = key.export_key(format='PEM')
         with open(priv_key_path, 'wb') as f:
-            f.write(priv_pem)
+            f.write(priv_pem.encode('ascii'))
 
         try:
             os.chmod(priv_key_path, 0o600)
         except Exception:
             pass
 
+        pub_key = key.public_key()
         try:
-            pub_str = key.public_key().export_key(format='OpenSSH')
-        except Exception:
-            raw = key.public_key().export_key(format='Raw')
-            pub_str = build_openssh_pub_from_raw(raw)
+            pub_str = pub_key.export_key(format='OpenSSH')
+        except Exception as exc:
+            raise RuntimeError("Unable to export Ed25519 public key in OpenSSH format") from exc
 
         pub_with_comment = (pub_str + ' ' + f'qemu-compose-{vmid}')
 
