@@ -10,8 +10,13 @@ class LocalStore:
         os.makedirs(self.data_dir, exist_ok=True)
 
     @property
-    def image_dir(self):
+    def image_root(self):
         path = os.path.join(self.data_dir, "image")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def image_dir(self, image_name):
+        path = os.path.join(self.image_root, image_name)
         os.makedirs(path, exist_ok=True)
         return path
 

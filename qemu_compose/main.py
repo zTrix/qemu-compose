@@ -10,6 +10,7 @@ import threading
 import tty
 import subprocess
 import signal
+import fcntl
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
@@ -144,6 +145,8 @@ def run(config_path, log_path=None, env_update=None):
 
     store = LocalStore()
     vmid = store.new_random_vmid()
+    instance_dir = store.instance_dir(vmid)
+    lock_fd: Optional[int] = None
 
     if log_path:
         debug_file = open(log_path, "wb")
@@ -169,6 +172,10 @@ def run(config_path, log_path=None, env_update=None):
         'GATEWAY_IP': '10.0.2.2',   # qemu user network default gateway ip
         'TERM_ROWS': term_size.lines,
         'TERM_COLS': term_size.columns,
+        'ID': vmid,
+        'STORAGE_PATH': store.data_dir,
+        'IMAGE_ROOT': store.image_root,
+        'INSTANCE_ROOT': store.instance_root,
     }
 
     if config.get('env'):
@@ -245,9 +252,29 @@ def run(config_path, log_path=None, env_update=None):
     vm.set_console(console_chardev='socket', device_type='isa-serial')
 
     try:
+        flags = os.O_RDONLY
+        if hasattr(os, 'O_DIRECTORY'):
+            flags |= os.O_DIRECTORY
+        lock_fd = os.open(instance_dir, flags)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
         vm.launch()
 
         term = Terminal(vm.console_file, debug_file)
+
+        try:
+            pid = vm.get_pid()
+        except Exception:
+            pid = None
+        try:
+            with open(os.path.join(instance_dir, "qemu.pid"), "w") as f:
+                f.write("%s" % (str(pid) if pid is not None else ""))
+            with open(os.path.join(instance_dir, "cid"), "w") as f:
+                f.write(str(cid))
+            with open(os.path.join(instance_dir, "name"), "w") as f:
+                f.write(str(name) if name is not None else "")
+        except Exception as e:
+            logger.warning("failed to write instance metadata: %s", e)
 
         boot_commands = config.get('boot_commands')
         if boot_commands:
@@ -272,6 +299,12 @@ def run(config_path, log_path=None, env_update=None):
         finally:
             vm._load_io_log()
             logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
+            try:
+                if lock_fd is not None:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    os.close(lock_fd)
+            except Exception as e:
+                logger.warning("failed to unlock instance dir: %s", e)
 
 def guess_conf_path(p:str | None):
     if p:
