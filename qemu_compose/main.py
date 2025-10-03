@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from typing import List, Optional
 import os
+import base64
 import re
 import sys
 import yaml
@@ -10,14 +11,18 @@ import threading
 import tty
 import subprocess
 import signal
+import fcntl
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 from .qemu.machine import QEMUMachine
 from .qemu.machine.machine import AbnormalShutdown
 from .jsonlisp import default_env, interp
+from .local_store import LocalStore
+from .vsock import get_available_guest_cid
 
 from .zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
+
 
 logger = logging.getLogger("qemu-compose")
 
@@ -136,6 +141,23 @@ def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
     return default
 
 def run(config_path, log_path=None, env_update=None):
+    cid = get_available_guest_cid(1000)
+    if cid is None:
+        raise Exception("no available guest cid found, please make sure vhost_vsock module loaded")
+
+    store = LocalStore()
+    vmid = store.new_random_vmid()
+    instance_dir = store.instance_dir(vmid)
+    lock_fd: Optional[int] = None
+    
+    if True:
+        # Acquire exclusive lock on instance_dir before any launch
+        #  lock early to prevent prune procedure removing contents before qemu starts
+        flags = os.O_RDONLY
+        if hasattr(os, 'O_DIRECTORY'):
+            flags |= os.O_DIRECTORY
+        lock_fd = os.open(instance_dir, flags)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
     if log_path:
         debug_file = open(log_path, "wb")
@@ -147,12 +169,35 @@ def run(config_path, log_path=None, env_update=None):
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    name = config.get('name')
-
     binary = config.get('binary', shutil.which('qemu-system-x86_64'))
     if not binary:
         raise Exception('qemu binary not found')
     
+    name = config.get('name')
+
+    # Check duplicate VM name after locking instance_dir but before launch
+    if name:
+        for entry in os.listdir(store.instance_root):
+            entry_path = os.path.join(store.instance_root, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            name_path = os.path.join(entry_path, "name")
+            if not os.path.exists(name_path):
+                continue
+            try:
+                with open(name_path, "r") as nf:
+                    existing_name = nf.read().strip()
+                if existing_name and existing_name == name:
+                    print(f"Error: creating container storage: the container name {name} is already in use by {entry}. You have to remove that instance to be able to reuse that name: that name is already in use", file=sys.stderr)
+                    # the same as podman
+                    return 125
+            except OSError:
+                # Ignore unreadable name files
+                pass
+    else:
+        # TODO: generate a random name by english words that never duplicate
+        pass
+
     cwd = os.path.normpath(os.path.abspath(os.path.dirname(config_path)))
     term_size = os.get_terminal_size()
 
@@ -161,6 +206,10 @@ def run(config_path, log_path=None, env_update=None):
         'GATEWAY_IP': '10.0.2.2',   # qemu user network default gateway ip
         'TERM_ROWS': term_size.lines,
         'TERM_COLS': term_size.columns,
+        'ID': vmid,
+        'STORAGE_PATH': store.data_dir,
+        'IMAGE_ROOT': store.image_root,
+        'INSTANCE_ROOT': store.instance_root,
     }
 
     if config.get('env'):
@@ -227,6 +276,19 @@ def run(config_path, log_path=None, env_update=None):
         args.append('-name')
         args.append(name)
 
+    if cid:
+        args.append("-device")
+        args.append("vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=%d" % cid)
+
+    store.prepare_ssh_key(vmid)
+
+    with open(store.instance_ssh_key_pub_path(vmid), 'rb') as pf:
+        pub_bytes = pf.read()
+
+    pub_b64 = base64.b64encode(pub_bytes).decode('ascii')
+    args.append('-smbios')
+    args.append(f'type=11,value=io.systemd.credential.binary:ssh.authorized_keys.root={pub_b64}')
+
     vm = QEMUMachine(binary, args=args, name=name)
     vm.add_monitor_null()
     vm.set_qmp_monitor(True)
@@ -236,6 +298,22 @@ def run(config_path, log_path=None, env_update=None):
         vm.launch()
 
         term = Terminal(vm.console_file, debug_file)
+
+        try:
+            pid = vm.get_pid()
+        except Exception:
+            pid = None
+        try:
+            with open(os.path.join(instance_dir, "qemu.pid"), "w") as f:
+                f.write("%s" % (str(pid) if pid is not None else ""))
+            with open(os.path.join(instance_dir, "cid"), "w") as f:
+                f.write(str(cid))
+            with open(os.path.join(instance_dir, "name"), "w") as f:
+                f.write(str(name) if name is not None else "")
+            with open(os.path.join(instance_dir, "instance-id"), "w") as f:
+                f.write(str(vmid))
+        except Exception as e:
+            logger.warning("failed to write instance metadata: %s", e)
 
         boot_commands = config.get('boot_commands')
         if boot_commands:
@@ -253,13 +331,21 @@ def run(config_path, log_path=None, env_update=None):
         logger.warning("Keyboard interrupt, shutting down vm...")
     finally:
         try:
-            if vm.is_running():
+            if vm is not None and vm.is_running():
                 vm.shutdown(hard=True)
         except AbnormalShutdown:
             logger.error('abnormal shutdown exception')
         finally:
-            vm._load_io_log()
-            logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
+            if vm is not None:
+                vm._load_io_log()
+                logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
+            try:
+                if lock_fd is not None:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    os.close(lock_fd)
+            except Exception as e:
+                logger.warning("failed to unlock instance dir: %s", e)
+    return 0
 
 def guess_conf_path(p:str | None):
     if p:
@@ -311,7 +397,7 @@ def cli():
         if not conf_path:
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
-        run(conf_path, log_path=args.log_path, env_update=env_update)
+        sys.exit(run(conf_path, log_path=args.log_path, env_update=env_update))
     else:
         parser.print_help()
         sys.exit(1)
