@@ -147,6 +147,15 @@ def run(config_path, log_path=None, env_update=None):
     vmid = store.new_random_vmid()
     instance_dir = store.instance_dir(vmid)
     lock_fd: Optional[int] = None
+    
+    if True:
+        # Acquire exclusive lock on instance_dir before any launch
+        #  lock early to prevent prune procedure removing contents before qemu starts
+        flags = os.O_RDONLY
+        if hasattr(os, 'O_DIRECTORY'):
+            flags |= os.O_DIRECTORY
+        lock_fd = os.open(instance_dir, flags)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
     if log_path:
         debug_file = open(log_path, "wb")
@@ -158,12 +167,35 @@ def run(config_path, log_path=None, env_update=None):
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    name = config.get('name')
-
     binary = config.get('binary', shutil.which('qemu-system-x86_64'))
     if not binary:
         raise Exception('qemu binary not found')
     
+    name = config.get('name')
+
+    # Check duplicate VM name after locking instance_dir but before launch
+    if name:
+        for entry in os.listdir(store.instance_root):
+            entry_path = os.path.join(store.instance_root, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            name_path = os.path.join(entry_path, "name")
+            if not os.path.exists(name_path):
+                continue
+            try:
+                with open(name_path, "r") as nf:
+                    existing_name = nf.read().strip()
+                if existing_name and existing_name == name:
+                    print(f"Error: creating container storage: the container name {name} is already in use by {entry}. You have to remove that instance to be able to reuse that name: that name is already in use", file=sys.stderr)
+                    # the same as podman
+                    return 125
+            except OSError:
+                # Ignore unreadable name files
+                pass
+    else:
+        # TODO: generate a random name by english words that never duplicate
+        pass
+
     cwd = os.path.normpath(os.path.abspath(os.path.dirname(config_path)))
     term_size = os.get_terminal_size()
 
@@ -252,12 +284,6 @@ def run(config_path, log_path=None, env_update=None):
     vm.set_console(console_chardev='socket', device_type='isa-serial')
 
     try:
-        flags = os.O_RDONLY
-        if hasattr(os, 'O_DIRECTORY'):
-            flags |= os.O_DIRECTORY
-        lock_fd = os.open(instance_dir, flags)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-
         vm.launch()
 
         term = Terminal(vm.console_file, debug_file)
@@ -292,19 +318,21 @@ def run(config_path, log_path=None, env_update=None):
         logger.warning("Keyboard interrupt, shutting down vm...")
     finally:
         try:
-            if vm.is_running():
+            if vm is not None and vm.is_running():
                 vm.shutdown(hard=True)
         except AbnormalShutdown:
             logger.error('abnormal shutdown exception')
         finally:
-            vm._load_io_log()
-            logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
+            if vm is not None:
+                vm._load_io_log()
+                logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
             try:
                 if lock_fd is not None:
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
                     os.close(lock_fd)
             except Exception as e:
                 logger.warning("failed to unlock instance dir: %s", e)
+    return 0
 
 def guess_conf_path(p:str | None):
     if p:
@@ -356,7 +384,7 @@ def cli():
         if not conf_path:
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
-        run(conf_path, log_path=args.log_path, env_update=env_update)
+        sys.exit(run(conf_path, log_path=args.log_path, env_update=env_update))
     else:
         parser.print_help()
         sys.exit(1)
