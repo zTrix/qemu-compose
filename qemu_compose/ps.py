@@ -84,7 +84,7 @@ def _format_row(meta: InstanceMeta) -> str:
 
 
 def _print_table(instances: Iterable[InstanceMeta]) -> None:
-    header = f"{'INSTANCE_ID':12}  {'NAME':20}  {'CID':6}  {'PID':8}  STATUS"
+    header = f"{'INSTANCE_ID':12}  {'NAME':20}  {'CID':6}  {'QEMU PID':8}  STATUS"
     print(header)
     print("-" * len(header))
     for m in instances:
