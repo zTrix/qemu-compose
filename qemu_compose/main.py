@@ -480,26 +480,20 @@ def cli():
             argv_after_ssh = []
 
         if not argv_after_ssh:
-            print("Usage:  qemu-compose ssh [OPTIONS] VMID|NAME COMMAND [ARG...]", file=sys.stderr)
+            print("Usage:  qemu-compose ssh VMID|NAME [COMMAND [ARG...]]", file=sys.stderr)
             sys.exit(1)
 
         store = LocalStore()
         instance_root = store.instance_root
 
         name_index = build_name_index(instance_root)
-        vmid: Optional[str] = None
-        vmid_index: Optional[int] = None
+        # Identifier must be the first token after 'ssh'.
+        ident_token = argv_after_ssh[0]
+        vmid: Optional[str] = resolve_identifier(instance_root, ident_token, name_index)
 
-        for i, tok in enumerate(argv_after_ssh):
-            resolved = resolve_identifier(instance_root, tok, name_index)
-            if resolved:
-                vmid = resolved
-                vmid_index = i
-                break
-
-        if not vmid or vmid_index is None:
-            print("Error: VMID or NAME not found.", file=sys.stderr)
-            print("Usage:  qemu-compose ssh [OPTIONS] VMID|NAME COMMAND [ARG...]", file=sys.stderr)
+        if not vmid:
+            print("Error: VMID or NAME not found, and must appear immediately after 'ssh'.", file=sys.stderr)
+            print("Usage:  qemu-compose ssh VMID|NAME [COMMAND [ARG...]]", file=sys.stderr)
             sys.exit(1)
 
         key_path = os.path.join(instance_root, vmid, "ssh-key")
@@ -507,7 +501,8 @@ def cli():
             print("Error: instance key not found: %s" % key_path, file=sys.stderr)
             sys.exit(1)
 
-        passthrough = argv_after_ssh[:vmid_index] + argv_after_ssh[vmid_index + 1:]
+        # Only passthrough args after the identifier are supported.
+        passthrough = argv_after_ssh[1:]
         ssh_cmd, cid_val = build_ssh_cmd(instance_root, vmid, passthrough)
 
         if not cid_val:
