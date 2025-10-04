@@ -78,10 +78,7 @@ class LocalStore:
         except Exception as exc:
             raise RuntimeError("Unable to export Ed25519 public key in OpenSSH format") from exc
 
-        pub_with_comment = (pub_str + ' ' + f'qemu-compose-{vmid}')
-
-        if not pub_with_comment.endswith('\n'):
-            pub_with_comment += '\n'
+        pub_with_comment = (pub_str.strip() + ' ' + f'qemu-compose-{vmid}\n')
 
         with open(pub_key_path, 'wb') as pf:
             pf.write(pub_with_comment.encode('ascii'))
