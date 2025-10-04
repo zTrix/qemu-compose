@@ -492,14 +492,15 @@ def cli():
 
         # Pass-through args: everything except the VMID token
         passthrough: List[str] = argv_after_ssh[:vmid_index] + argv_after_ssh[vmid_index + 1:]
-        if not passthrough:
+        if passthrough:
+            ssh_cmd.extend(passthrough)
+
+        if not cid_val:
             # No destination/command provided; print the constructed ssh command
             # so users can see defaults and compose their own invocation.
             printable = " ".join(shlex.quote(p) for p in ssh_cmd)
             print(printable)
             sys.exit(0)
-
-        ssh_cmd.extend(passthrough)
 
         try:
             # Replace current process to preserve exit code and TTY behavior
