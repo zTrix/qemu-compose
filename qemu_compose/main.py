@@ -188,7 +188,7 @@ def run(config_path, log_path=None, env_update=None):
                 with open(name_path, "r") as nf:
                     existing_name = nf.read().strip()
                 if existing_name and existing_name == name:
-                    print(f"Error: creating container storage: the container name {name} is already in use by {entry}. You have to remove that instance to be able to reuse that name: that name is already in use", file=sys.stderr)
+                    print(f"Error: creating vm storage: the vm name {name} is already in use by {entry}. You have to remove that instance to be able to reuse that name: that name is already in use", file=sys.stderr)
                     # the same as podman
                     return 125
             except OSError:
