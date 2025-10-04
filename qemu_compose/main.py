@@ -429,36 +429,77 @@ def cli():
             sys.exit(1)
         sys.exit(run(conf_path, log_path=args.log_path, env_update=env_update))
     elif args.command == "ssh":
-        # Implement: qemu-compose ssh [OPTIONS] VMID COMMAND [ARG...]
-        # Find tokens after 'ssh' and detect VMID as the first token that
-        # matches an existing instance id. Everything else is passed to ssh.
-        # Use the raw argv slice after the literal 'ssh' to avoid
-        # argparse consuming options that belong to ssh (e.g. '-f').
+        # Functional helpers scoped to ssh subcommand for clarity.
+        def read_text(path: str) -> Optional[str]:
+            try:
+                with open(path, "r") as f:
+                    return f.read().strip()
+            except Exception:
+                return None
+
+        def build_name_index(root: str) -> dict[str, str]:
+            # Map VM name -> VMID for all instances having a name file.
+            def name_of(vmid: str) -> Optional[str]:
+                return read_text(os.path.join(root, vmid, "name"))
+
+            def collect() -> List[tuple[str, Optional[str]]]:
+                return [
+                    (d, name_of(d))
+                    for d in os.listdir(root)
+                    if os.path.isdir(os.path.join(root, d))
+                ]
+
+            return {name: vmid for (vmid, name) in collect() if name}
+
+        def resolve_identifier(root: str, ident: str, name_index: dict[str, str]) -> Optional[str]:
+            # Prefer direct VMID directory match; otherwise try name index.
+            if os.path.isdir(os.path.join(root, ident)):
+                return ident
+            return name_index.get(ident)
+
+        def build_ssh_cmd(root: str, vmid: str, passthrough: List[str]) -> tuple[List[str], Optional[str]]:
+            key_path = os.path.join(root, vmid, "ssh-key")
+            cid_path = os.path.join(root, vmid, "cid")
+            cid_val = read_text(cid_path)
+
+            base: List[str] = [
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-i", key_path,
+            ]
+
+            destination = f"root@vsock%{cid_val}" if cid_val else "root@vsock%${cid}"
+            cmd = base + [destination] + passthrough
+            return cmd, cid_val
+
+        # Parse raw argv after the 'ssh' token to avoid mixing with argparse.
         try:
             argv_after_ssh = sys.argv[sys.argv.index("ssh") + 1:]
         except ValueError:
             argv_after_ssh = []
 
         if not argv_after_ssh:
-            print("Usage:  qemu-compose ssh [OPTIONS] VMID COMMAND [ARG...]", file=sys.stderr)
+            print("Usage:  qemu-compose ssh [OPTIONS] VMID|NAME COMMAND [ARG...]", file=sys.stderr)
             sys.exit(1)
 
         store = LocalStore()
         instance_root = store.instance_root
 
-        vmid = None
-        vmid_index = None
+        name_index = build_name_index(instance_root)
+        vmid: Optional[str] = None
+        vmid_index: Optional[int] = None
+
         for i, tok in enumerate(argv_after_ssh):
-            # Treat the first token that corresponds to an existing instance id as VMID
-            inst_dir = os.path.join(instance_root, tok)
-            if os.path.isdir(inst_dir):
-                vmid = tok
+            resolved = resolve_identifier(instance_root, tok, name_index)
+            if resolved:
+                vmid = resolved
                 vmid_index = i
                 break
 
-        if not vmid:
-            print("Error: VMID not found. Existing instances live under %s" % instance_root, file=sys.stderr)
-            print("Usage:  qemu-compose ssh [OPTIONS] VMID COMMAND [ARG...]", file=sys.stderr)
+        if not vmid or vmid_index is None:
+            print("Error: VMID or NAME not found.", file=sys.stderr)
+            print("Usage:  qemu-compose ssh [OPTIONS] VMID|NAME COMMAND [ARG...]", file=sys.stderr)
             sys.exit(1)
 
         key_path = os.path.join(instance_root, vmid, "ssh-key")
@@ -466,44 +507,15 @@ def cli():
             print("Error: instance key not found: %s" % key_path, file=sys.stderr)
             sys.exit(1)
 
-        # Defaults come first; user-specified options can override them later
-        ssh_cmd: List[str] = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-i", key_path,
-        ]
-
-        # Append default destination using vsock CID
-        cid_path = os.path.join(instance_root, vmid, "cid")
-        cid_val: str | None = None
-        try:
-            if os.path.exists(cid_path):
-                with open(cid_path, "r") as cf:
-                    cid_val = cf.read().strip()
-        except Exception:
-            cid_val = None
-
-        if cid_val:
-            ssh_cmd.append(f"root@vsock%{cid_val}")
-        else:
-            # Fallback to a placeholder if cid is unknown
-            ssh_cmd.append("root@vsock%${cid}")
-
-        # Pass-through args: everything except the VMID token
-        passthrough: List[str] = argv_after_ssh[:vmid_index] + argv_after_ssh[vmid_index + 1:]
-        if passthrough:
-            ssh_cmd.extend(passthrough)
+        passthrough = argv_after_ssh[:vmid_index] + argv_after_ssh[vmid_index + 1:]
+        ssh_cmd, cid_val = build_ssh_cmd(instance_root, vmid, passthrough)
 
         if not cid_val:
-            # No destination/command provided; print the constructed ssh command
-            # so users can see defaults and compose their own invocation.
             printable = " ".join(shlex.quote(p) for p in ssh_cmd)
             print(printable)
             sys.exit(0)
 
         try:
-            # Replace current process to preserve exit code and TTY behavior
             os.execvp(ssh_cmd[0], ssh_cmd)
         except FileNotFoundError:
             print("Error: 'ssh' binary not found in PATH", file=sys.stderr)
