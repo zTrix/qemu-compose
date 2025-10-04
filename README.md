@@ -33,3 +33,35 @@ $ qemu-compose up
 Demo:
 
 [![asciicast](https://raw.githubusercontent.com/zTrix/qemu-compose/refs/heads/main/assets/726386.svg)](https://asciinema.org/a/726386)
+
+## SSH Helper
+
+qemu-compose provides a helper to invoke ssh with the instance key and safe defaults.
+
+- Usage: `qemu-compose ssh [OPTIONS] VMID COMMAND [ARG...]`
+- Defaults added by qemu-compose:
+  - `-o StrictHostKeyChecking=no`
+  - `-o UserKnownHostsFile=/dev/null`
+  - `-i ~/.local/share/qemu-compose/instance/VMID/ssh-key`
+  - appends `root@vsock%<cid>` as the default destination (falls back to `root@vsock%${cid}` if CID is unknown)
+
+Examples:
+
+```
+# Print the default ssh command that would be used for a given VMID
+$ qemu-compose ssh <vmid>
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.local/share/qemu-compose/instance/<vmid>/ssh-key root@vsock%<cid>
+
+# Connect using vsock destination (cid recorded when the VM booted)
+$ qemu-compose ssh <vmid> root@vsock%<cid>
+
+# Connect over TCP instead (override destination and add your own options)
+$ qemu-compose ssh <vmid> -p 2222 root@127.0.0.1
+
+# Run a remote command
+$ qemu-compose ssh <vmid> root@vsock%<cid> uname -a
+```
+
+Notes:
+- The instance key is generated at first boot and stored under `~/.local/share/qemu-compose/instance/<vmid>/ssh-key`.
+- Any ssh options you pass will be forwarded; the last-specified option wins.
