@@ -24,6 +24,7 @@ from .vsock import get_available_guest_cid
 
 from .zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
 from .utils.names_gen import generate_unique_name
+from .utils.hostnames import to_valid_hostname
 
 
 logger = logging.getLogger("qemu-compose")
@@ -141,6 +142,7 @@ def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
         # FIXME: format has security issues
         return str(value).format(**env)
     return default
+
 
 
 
@@ -283,9 +285,23 @@ def run(config_path, log_path=None, env_update=None):
             if val is not None:
                 args.append(val)
 
+    hostname = None
     if name:
         args.append('-name')
         args.append(name)
+        hostname = to_valid_hostname(name)
+
+    if hostname:
+        # https://systemd.io/CREDENTIALS/
+        args.append('-smbios')
+        args.append('type=11,value=io.systemd.credential:system.hostname=' + hostname)
+
+    # add user network
+    args.append('-netdev')
+    # https://man.archlinux.org/man/qemu.1.en#hostname=name
+    args.append('user,id=user.qemu-compose%s' % (',hostname=' + hostname if hostname else '',))
+    args.append('-device')
+    args.append('virtio-net,netdev=user.qemu-compose')
 
     if cid:
         args.append("-device")
