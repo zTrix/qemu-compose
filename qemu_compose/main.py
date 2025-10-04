@@ -287,6 +287,10 @@ def run(config_path, log_path=None, env_update=None):
         args.append('-name')
         args.append(name)
 
+        # https://systemd.io/CREDENTIALS/
+        args.append('-smbios')
+        args.append('type=11,value=io.systemd.credential.binary:system.hostname=' + base64.b64encode(name.encode('utf-8')).decode('ascii'))
+
     if cid:
         args.append("-device")
         args.append("vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=%d" % cid)
