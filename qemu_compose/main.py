@@ -447,6 +447,22 @@ def cli():
             "-i", key_path,
         ]
 
+        # Append default destination using vsock CID
+        cid_path = os.path.join(instance_root, vmid, "cid")
+        cid_val: str | None = None
+        try:
+            if os.path.exists(cid_path):
+                with open(cid_path, "r") as cf:
+                    cid_val = cf.read().strip()
+        except Exception:
+            cid_val = None
+
+        if cid_val:
+            ssh_cmd.append(f"root@vsock%{cid_val}")
+        else:
+            # Fallback to a placeholder if cid is unknown
+            ssh_cmd.append("root@vsock%${cid}")
+
         # Pass-through args: everything except the VMID token
         passthrough: List[str] = argv_after_ssh[:vmid_index] + argv_after_ssh[vmid_index + 1:]
         if not passthrough:
