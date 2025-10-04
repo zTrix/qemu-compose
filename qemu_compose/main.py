@@ -291,6 +291,13 @@ def run(config_path, log_path=None, env_update=None):
         args.append("-device")
         args.append("vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=%d" % cid)
 
+    # add user network
+    args.append('-netdev')
+    # https://man.archlinux.org/man/qemu.1.en#hostname=name
+    args.append('user,id=user.qemu-compose%s' % (',hostname=' + name if name else '',))
+    args.append('-device')
+    args.append('virtio-net,netdev=user.qemu-compose')
+
     store.prepare_ssh_key(vmid)
 
     with open(store.instance_ssh_key_pub_path(vmid), 'rb') as pf:
