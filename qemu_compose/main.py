@@ -398,6 +398,7 @@ def cli():
         epilog="""Commands:
   up          Create and start QEMU vm
   ssh         Run ssh with instance key
+  ps          List VM instances
   version     Show the qemu-compose version information
 """,
     )
@@ -407,8 +408,8 @@ def cli():
     parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
     parser.add_argument("--log-path", type=str, help="detailed log path")
     parser.add_argument("--project-directory", type=str, help="Specify an alternate working directory (default: the path of the Compose file)")
-    # Accept unknown args so we can forward them to subcommands like `ssh`
-    args, _ = parser.parse_known_args()
+    # Parse only known top-level args, leave subcommand options for later
+    args, rest = parser.parse_known_args()
 
     if args.command == "version" or args.version:
         version(short=args.short)
@@ -509,6 +510,25 @@ def cli():
         except OSError as e:
             print(f"Error executing ssh: {e}", file=sys.stderr)
             sys.exit(1)
+    elif args.command == "ps":
+        import argparse as _argparse
+        # Sub-parser for `ps` options to keep scope minimal
+        ps_parser = _argparse.ArgumentParser(
+            prog="qemu-compose ps",
+            add_help=True,
+            description="List qemu-compose VM instances",
+        )
+        ps_parser.add_argument(
+            "-a", "--all",
+            action="store_true",
+            help="Show all the containers, default is only running vm instance",
+        )
+        # Parse only the args following the "ps" command
+        ps_args = ps_parser.parse_args(rest)
+
+        from .ps import command_ps
+
+        sys.exit(command_ps(show_all=ps_args.all))
     else:
         parser.print_help()
         sys.exit(1)
