@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from typing import List, Optional
+from typing import List, Optional, Set
 import os
 import shlex
 import base64
@@ -23,6 +23,7 @@ from .local_store import LocalStore
 from .vsock import get_available_guest_cid
 
 from .zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
+from .utils.names_gen import generate_unique_name
 
 
 logger = logging.getLogger("qemu-compose")
@@ -141,6 +142,8 @@ def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
         return str(value).format(**env)
     return default
 
+
+
 def run(config_path, log_path=None, env_update=None):
     cid = get_available_guest_cid(1000)
     if cid is None:
@@ -176,28 +179,35 @@ def run(config_path, log_path=None, env_update=None):
     
     name = config.get('name')
 
+    # Collect existing VM names for duplicate detection and auto-generation
+    existing_names = {}
+    for entry in os.listdir(store.instance_root):
+        entry_path = os.path.join(store.instance_root, entry)
+        if not os.path.isdir(entry_path):
+            continue
+        name_path = os.path.join(entry_path, "name")
+        if not os.path.exists(name_path):
+            continue
+        try:
+            with open(name_path, "r") as nf:
+                existing_name = nf.read().strip()
+            if existing_name:
+                existing_names[existing_name] = entry
+        except OSError:
+            # Ignore unreadable name files
+            pass
+
     # Check duplicate VM name after locking instance_dir but before launch
     if name:
-        for entry in os.listdir(store.instance_root):
-            entry_path = os.path.join(store.instance_root, entry)
-            if not os.path.isdir(entry_path):
-                continue
-            name_path = os.path.join(entry_path, "name")
-            if not os.path.exists(name_path):
-                continue
-            try:
-                with open(name_path, "r") as nf:
-                    existing_name = nf.read().strip()
-                if existing_name and existing_name == name:
-                    print(f"Error: creating vm storage: the vm name {name} is already in use by {entry}. You have to remove that instance to be able to reuse that name: that name is already in use", file=sys.stderr)
-                    # the same as podman
-                    return 125
-            except OSError:
-                # Ignore unreadable name files
-                pass
+        if name in existing_names:
+            print(
+                f"Error: creating vm storage: the vm name {name} is already in use by {existing_names.get(name)}. You have to remove that instance to be able to reuse that name: that name is already in use",
+                file=sys.stderr,
+            )
+            # the same as podman
+            return 125
     else:
-        # TODO: generate a random name by english words that never duplicate
-        pass
+        name = generate_unique_name(existing_names)
 
     cwd = os.path.normpath(os.path.abspath(os.path.dirname(config_path)))
     term_size = os.get_terminal_size()
