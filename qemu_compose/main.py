@@ -451,11 +451,27 @@ def cli():
 
             return {name: vmid for (vmid, name) in collect() if name}
 
-        def resolve_identifier(root: str, ident: str, name_index: dict[str, str]) -> Optional[str]:
-            # Prefer direct VMID directory match; otherwise try name index.
-            if os.path.isdir(os.path.join(root, ident)):
-                return ident
-            return name_index.get(ident)
+        def list_vmids(root: str) -> List[str]:
+            return [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
+
+        def resolve_identifier_with_prefix(
+            ident: str,
+            ids: List[str],
+            name_index: dict[str, str],
+        ) -> tuple[Optional[str], List[str]]:
+            # Exact matches take precedence
+            if ident in ids:
+                return ident, [ident]
+            if ident in name_index:
+                return name_index[ident], [name_index[ident]]
+
+            id_matches = [i for i in ids if i.startswith(ident)]
+            name_matches = [name_index[n] for n in name_index.keys() if n.startswith(ident)]
+            candidates = sorted(set(id_matches + name_matches))
+
+            if len(candidates) == 1:
+                return candidates[0], candidates
+            return None, candidates
 
         def build_ssh_cmd(root: str, vmid: str, passthrough: List[str]) -> tuple[List[str], Optional[str]]:
             key_path = os.path.join(root, vmid, "ssh-key")
@@ -487,13 +503,20 @@ def cli():
         instance_root = store.instance_root
 
         name_index = build_name_index(instance_root)
-        # Identifier must be the first token after 'ssh'.
+        ids = list_vmids(instance_root)
+        # Identifier must be the first token after 'ssh'. Supports unique prefix.
         ident_token = argv_after_ssh[0]
-        vmid: Optional[str] = resolve_identifier(instance_root, ident_token, name_index)
+        vmid, candidates = resolve_identifier_with_prefix(ident_token, ids, name_index)
 
-        if not vmid:
-            print("Error: VMID or NAME not found, and must appear immediately after 'ssh'.", file=sys.stderr)
+        if vmid is None and not candidates:
+            print("Error: no VMID or NAME matches the given prefix, and it must appear immediately after 'ssh'.", file=sys.stderr)
             print("Usage:  qemu-compose ssh VMID|NAME [COMMAND [ARG...]]", file=sys.stderr)
+            sys.exit(1)
+
+        if vmid is None and candidates:
+            preview = ", ".join(sorted(candidates)[:8])
+            more = "" if len(candidates) <= 8 else f" ... and {len(candidates)-8} more"
+            print(f"Error: identifier '{ident_token}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
             sys.exit(1)
 
         key_path = os.path.join(instance_root, vmid, "ssh-key")
