@@ -66,18 +66,27 @@ def _parse_manifest(image_root: str, image_id: str) -> ImageManifest:
 
 def _instance_paths(store: LocalStore, vmid: str) -> Tuple[str, str]:
     inst_dir = store.instance_dir(vmid)
-    disk_path = os.path.join(inst_dir, "instance.qcow2")
-    return inst_dir, disk_path
+    return inst_dir, os.path.join(inst_dir, "instance.qcow2")
+
+@dataclass(frozen=True)
+class DiskSpec:
+    filename: str
+    format: str
+    opts: List[str]
 
 
-def _find_base_disk(manifest: Dict) -> Optional[str]:
+def _manifest_disks(manifest: Dict) -> List[DiskSpec]:
     # Expect manifest["disks"] like: [["disk.qcow2", "qcow2", "if=virtio"], ...]
-    disks = manifest.get("disks") or []
-    for item in disks:
-        if isinstance(item, list) and item:
-            # Use the first disk as base
-            return item[0]
-    return None
+    raw = manifest.get("disks") or []
+    def to_disk(item: List) -> Optional[DiskSpec]:
+        if not isinstance(item, list) or not item:
+            return None
+        filename = str(item[0])
+        fmt = str(item[1]) if len(item) > 1 and item[1] else "qcow2"
+        opts = [str(x) for x in (item[2:] if len(item) > 2 else [])]
+        return DiskSpec(filename=filename, format=fmt, opts=opts)
+    disks: List[DiskSpec] = [d for d in (to_disk(x) for x in raw) if d]
+    return disks
 
 
 def _create_overlay(base_path: str, overlay_path: str) -> int:
@@ -97,8 +106,18 @@ def _create_overlay(base_path: str, overlay_path: str) -> int:
         print("Error: 'qemu-img' binary not found in PATH", flush=True)
         return 127
 
+def _drive_param_for(overlay_path: str, spec: DiskSpec) -> str:
+    # Build a '-drive' parameter string combining manifest opts with required pieces.
+    opts = list(spec.opts)
+    if not any(o.startswith("if=") for o in opts):
+        opts.insert(0, "if=virtio")
+    # Always use qcow2 overlay per requirement
+    opts.append("format=qcow2")
+    opts.append(f"file={overlay_path}")
+    return ",".join(opts)
 
-def _format_qemu_cmd(manifest: ImageManifest, instance_dir: str, overlay_disk: str, name: str) -> List[str]:
+
+def _format_qemu_cmd(manifest: ImageManifest, instance_dir: str, overlays: List[Tuple[str, DiskSpec]], name: str) -> List[str]:
     # Minimal runnable qemu command based on manifest hints. We only assemble a base command
     # and echo it for the user to run.
     raw_qemu_args = manifest.manifest.get("qemu_args") or []
@@ -115,8 +134,11 @@ def _format_qemu_cmd(manifest: ImageManifest, instance_dir: str, overlay_disk: s
         "-machine", "type=q35,hpet=off",
         "-accel", "kvm",
         "-nographic",
-        "-drive", f"if=virtio,format=qcow2,file={overlay_disk}",
     ]
+
+    # Add a -drive entry for each overlay
+    for overlay_path, spec in overlays:
+        base.extend(["-drive", _drive_param_for(overlay_path, spec)])
 
     # Allow manifest-provided extra args after our safe defaults.
     return base + qemu_args
@@ -128,25 +150,27 @@ def command_run(*, image_id: str, name: Optional[str]) -> int:
     # Resolve name and vmid
     name = _choose_name(name, store.instance_root)
     vmid = store.new_random_vmid()
-    inst_dir, overlay_disk = _instance_paths(store, vmid)
+    inst_dir, _ = _instance_paths(store, vmid)
     _ensure_dir(inst_dir)
 
     # Parse manifest
     manifest_obj = _parse_manifest(store.image_root, image_id)
     manifest = manifest_obj.manifest
 
-    # Compute paths
-    base_disk_name = _find_base_disk(manifest)
-    if not base_disk_name:
+    # Compute and create overlays for each disk
+    disk_specs = _manifest_disks(manifest)
+    if not disk_specs:
         print("Error: no 'disks' entry found in manifest.json", flush=True)
         return 1
 
-    base_disk_path = os.path.join(manifest_obj.image_dir, base_disk_name)
-
-    # Create overlay
-    rc = _create_overlay(base_disk_path, overlay_disk)
-    if rc != 0:
-        return rc
+    overlays: List[Tuple[str, DiskSpec]] = []
+    for spec in disk_specs:
+        base_disk_path = os.path.join(manifest_obj.image_dir, spec.filename)
+        overlay_path = os.path.join(inst_dir, spec.filename)
+        rc = _create_overlay(base_disk_path, overlay_path)
+        if rc != 0:
+            return rc
+        overlays.append((overlay_path, spec))
 
     # Persist minimal instance metadata
     try:
@@ -158,6 +182,6 @@ def command_run(*, image_id: str, name: Optional[str]) -> int:
         pass
 
     # Build qemu command and print
-    cmd = _format_qemu_cmd(manifest_obj, inst_dir, overlay_disk, name)
+    cmd = _format_qemu_cmd(manifest_obj, inst_dir, overlays, name)
     print(" ".join(shlex.quote(x) for x in cmd))
     return 0
