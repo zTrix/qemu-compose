@@ -4,7 +4,6 @@ import json
 import os
 import shlex
 import subprocess
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from qemu_compose.local_store import LocalStore

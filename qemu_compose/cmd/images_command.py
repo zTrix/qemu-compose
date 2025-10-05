@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Iterable, List, Optional, Tuple, Any
+from typing import Iterable, List, Optional, Tuple
 import os
 
 from qemu_compose.local_store import LocalStore
