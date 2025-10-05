@@ -9,7 +9,7 @@ http_serve:
   root: '{CWD}'
 before_script:
   - qemu-img create -f qcow2 {target} 128G
-args:
+qemu_args:
   - # basic
     smp: '2'
     m: 4G

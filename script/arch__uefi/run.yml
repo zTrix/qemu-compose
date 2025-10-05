@@ -4,7 +4,7 @@ env:
   temp_image: "test_run.qcow2"
 before_script:
   - qemu-img create -b {base_image} -f qcow2 -F qcow2 {temp_image}
-args:
+qemu_args:
   - # basic
     smp: '2'
     m: 4G
