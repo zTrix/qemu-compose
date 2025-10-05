@@ -9,22 +9,8 @@ from typing import Dict, List, Optional, Tuple
 
 from qemu_compose.local_store import LocalStore
 from qemu_compose.utils.names_gen import generate_unique_name
-
-
-@dataclass(frozen=True)
-class ImageManifest:
-    image_id: str
-    root: str
-    manifest: Dict
-
-    @property
-    def manifest_path(self) -> str:
-        return os.path.join(self.root, self.image_id, "manifest.json")
-
-    @property
-    def image_dir(self) -> str:
-        return os.path.join(self.root, self.image_id)
-
+from qemu_compose.instance import new_random_vmid
+from qemu_compose.image import ImageManifest, DiskSpec
 
 def _read_json(path: str) -> Dict:
     with open(path, "r", encoding="utf-8") as f:
@@ -59,15 +45,6 @@ def _choose_name(provided: Optional[str], instance_root: str) -> str:
     return provided or generate_unique_name(_existing_names(instance_root))
 
 
-def _parse_manifest(image_root: str, image_id: str) -> ImageManifest:
-    manifest = ImageManifest(image_id=image_id, root=image_root, manifest=_read_json(os.path.join(image_root, image_id, "manifest.json")))
-    return manifest
-
-
-def _image_exists(image_root: str, image_id: str) -> bool:
-    return os.path.isdir(os.path.join(image_root, image_id))
-
-
 def _list_image_ids(image_root: str) -> List[str]:
     try:
         return [d for d in os.listdir(image_root) if os.path.isdir(os.path.join(image_root, d))]
@@ -93,7 +70,6 @@ def _read_manifest_repo_tags(image_root: str, image_id: str) -> List[str]:
     except Exception:
         return []
 
-
 def _resolve_image_by_repo_tag(image_root: str, token: str) -> Tuple[Optional[str], List[str]]:
     ids = _list_image_ids(image_root)
     matches: List[str] = []
@@ -109,27 +85,6 @@ def _resolve_image_by_repo_tag(image_root: str, token: str) -> Tuple[Optional[st
 def _instance_paths(store: LocalStore, vmid: str) -> Tuple[str, str]:
     inst_dir = store.instance_dir(vmid)
     return inst_dir, os.path.join(inst_dir, "instance.qcow2")
-
-@dataclass(frozen=True)
-class DiskSpec:
-    filename: str
-    format: str
-    opts: List[str]
-
-
-def _manifest_disks(manifest: Dict) -> List[DiskSpec]:
-    # Expect manifest["disks"] like: [["disk.qcow2", "qcow2", "if=virtio"], ...]
-    raw = manifest.get("disks") or []
-    def to_disk(item: List) -> Optional[DiskSpec]:
-        if not isinstance(item, list) or not item:
-            return None
-        filename = str(item[0])
-        fmt = str(item[1]) if len(item) > 1 and item[1] else "qcow2"
-        opts = [str(x) for x in (item[2:] if len(item) > 2 else [])]
-        return DiskSpec(filename=filename, format=fmt, opts=opts)
-    disks: List[DiskSpec] = [d for d in (to_disk(x) for x in raw) if d]
-    return disks
-
 
 def _create_overlay(base_path: str, overlay_path: str) -> int:
     cmd = [
@@ -150,19 +105,20 @@ def _create_overlay(base_path: str, overlay_path: str) -> int:
 
 def _drive_param_for(overlay_path: str, spec: DiskSpec) -> str:
     # Build a '-drive' parameter string combining manifest opts with required pieces.
-    opts = list(spec.opts)
-    if not any(o.startswith("if=") for o in opts):
-        opts.insert(0, "if=virtio")
+    opts = []
     # Always use qcow2 overlay per requirement
-    opts.append("format=qcow2")
     opts.append(f"file={overlay_path}")
+    if spec.format:
+        opts.append("format=" + spec.format)
+    if spec.opts:
+        opts.append(spec.opts)
     return ",".join(opts)
 
 
 def _format_qemu_cmd(manifest: ImageManifest, instance_dir: str, overlays: List[Tuple[str, DiskSpec]], name: str) -> List[str]:
     # Minimal runnable qemu command based on manifest hints. We only assemble a base command
     # and echo it for the user to run.
-    raw_qemu_args = manifest.manifest.get("qemu_args") or []
+    raw_qemu_args = manifest.qemu_args or []
     # Interpolate simple placeholders like {INSTANCE_DIR}
     env = {"INSTANCE_DIR": instance_dir}
     qemu_args = [str(a).format(**env) for a in raw_qemu_args]
@@ -189,11 +145,8 @@ def _format_qemu_cmd(manifest: ImageManifest, instance_dir: str, overlays: List[
 def command_run(*, image_id: str, name: Optional[str]) -> int:
     store = LocalStore()
 
-    # Resolve name and vmid
+    # Resolve name
     name = _choose_name(name, store.instance_root)
-    vmid = store.new_random_vmid()
-    inst_dir, _ = _instance_paths(store, vmid)
-    _ensure_dir(inst_dir)
 
     # Resolve image id: exact, unique prefix, or repo_tag
     resolved_id, prefix_matches = _resolve_image_by_prefix(store.image_root, image_id)
@@ -209,18 +162,17 @@ def command_run(*, image_id: str, name: Optional[str]) -> int:
             return 1
 
     # Parse manifest of the resolved image id
-    manifest_obj = _parse_manifest(store.image_root, resolved_id)
-    manifest = manifest_obj.manifest
+    image_dir = os.path.join(store.image_root, resolved_id)
+    manifest = ImageManifest.load_file(image_dir)
 
-    # Compute and create overlays for each disk
-    disk_specs = _manifest_disks(manifest)
-    if not disk_specs:
-        print("Error: no 'disks' entry found in manifest.json", flush=True)
-        return 1
+    vmid = new_random_vmid(store.instance_root)
+    inst_dir, _ = _instance_paths(store, vmid)
+    _ensure_dir(inst_dir)
 
     overlays: List[Tuple[str, DiskSpec]] = []
-    for spec in disk_specs:
-        base_disk_path = os.path.join(manifest_obj.image_dir, spec.filename)
+
+    for spec in manifest.disks:
+        base_disk_path = os.path.join(image_dir, spec.filename)
         overlay_path = os.path.join(inst_dir, spec.filename)
         rc = _create_overlay(base_disk_path, overlay_path)
         if rc != 0:
@@ -237,6 +189,6 @@ def command_run(*, image_id: str, name: Optional[str]) -> int:
         pass
 
     # Build qemu command and print
-    cmd = _format_qemu_cmd(manifest_obj, inst_dir, overlays, name)
+    cmd = _format_qemu_cmd(manifest, inst_dir, overlays, name)
     print(" ".join(shlex.quote(x) for x in cmd))
     return 0

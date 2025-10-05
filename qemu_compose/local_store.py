@@ -1,8 +1,5 @@
 
 import os
-import random
-import string
-import struct
 
 class LocalStore:
     def __init__(self, name="qemu-compose"):
@@ -31,13 +28,3 @@ class LocalStore:
         path = os.path.join(self.instance_root, vmid)
         os.makedirs(path, exist_ok=True)
         return path
-
-    def new_random_vmid(self, charset=None, length=12) -> str:
-        if charset is None:
-            charset = string.ascii_lowercase + string.digits
-        while True:
-            vmid = ''.join(random.choices(charset, k=length))
-            path = os.path.join(self.instance_root, vmid)
-            if not os.path.exists(path):
-                os.makedirs(path)
-                return vmid
