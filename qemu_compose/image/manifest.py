@@ -48,7 +48,6 @@ class ImageManifest:
     created: datetime.datetime
     repo_tags: List[RepoTag]
     disks: List[DiskSpec]
-    qemu_config: Dict[str, Any]
     qemu_args: List[str]
     digest: str
     comment: Optional[str]
@@ -85,9 +84,6 @@ class ImageManifest:
                 if ds:
                     disks.append(ds)
 
-        qemu_config_raw = obj.get("qemu_config")
-        qemu_config: Dict[str, Any] = qemu_config_raw if isinstance(qemu_config_raw, dict) else {}
-
         qemu_args_raw = obj.get("qemu_args") or []
         qemu_args = [str(a) for a in qemu_args_raw if isinstance(a, (str, int, float))]
 
@@ -102,7 +98,6 @@ class ImageManifest:
             created=created,
             repo_tags=repo_tags,
             disks=disks,
-            qemu_config=qemu_config,
             qemu_args=qemu_args,
             digest=digest,
             comment=comment,
