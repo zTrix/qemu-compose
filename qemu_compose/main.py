@@ -18,13 +18,13 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 from .qemu.machine import QEMUMachine
 from .qemu.machine.machine import AbnormalShutdown
-from .jsonlisp import default_env, interp
 from .local_store import LocalStore
 from .vsock import get_available_guest_cid
 
-from .zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
+from .utils.zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
 from .utils.names_gen import generate_unique_name
 from .utils.hostnames import to_valid_hostname
+from .utils.jsonlisp import default_env, interp
 
 
 logger = logging.getLogger("qemu-compose")
@@ -559,7 +559,7 @@ def cli():
         # Parse only the args following the "ps" command
         ps_args = ps_parser.parse_args(rest)
 
-        from .ps import command_ps
+        from .cmd.ps import command_ps
 
         sys.exit(command_ps(show_all=ps_args.all))
     elif args.command == "images":
