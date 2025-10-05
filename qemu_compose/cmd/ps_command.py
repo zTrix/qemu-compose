@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
+from qemu_compose.local_store import LocalStore
 
 @dataclass(frozen=True)
 class InstanceMeta:
@@ -11,17 +12,6 @@ class InstanceMeta:
     name: Optional[str]
     cid: Optional[int]
     pid: Optional[int]
-
-
-@dataclass(frozen=True)
-class Store:
-    data_dir: str
-
-    @property
-    def instance_root(self) -> str:
-        path = os.path.join(self.data_dir, "instance")
-        # Do not create directories here to avoid side effects
-        return path
 
 
 def _safe_read(path: str) -> Optional[str]:
@@ -49,7 +39,7 @@ def _is_pid_running(pid: Optional[int]) -> bool:
         return False
 
 
-def _list_instance_ids(store: Store) -> List[str]:
+def _list_instance_ids(store: LocalStore) -> List[str]:
     try:
         return sorted(
             [d for d in os.listdir(store.instance_root) if os.path.isdir(os.path.join(store.instance_root, d))]
@@ -58,7 +48,7 @@ def _list_instance_ids(store: Store) -> List[str]:
         return []
 
 
-def _read_instance_meta(store: Store, instance_id: str) -> InstanceMeta:
+def _read_instance_meta(store: LocalStore, instance_id: str) -> InstanceMeta:
     # Avoid side effects: do not create directories while reading
     base = os.path.join(store.instance_root, instance_id)
     name = _safe_read(os.path.join(base, "name"))
@@ -67,7 +57,7 @@ def _read_instance_meta(store: Store, instance_id: str) -> InstanceMeta:
     return InstanceMeta(instance_id=instance_id, name=name, cid=cid, pid=pid)
 
 
-def _collect_instances(store: Store) -> List[InstanceMeta]:
+def _collect_instances(store: LocalStore) -> List[InstanceMeta]:
     return [_read_instance_meta(store, iid) for iid in _list_instance_ids(store)]
 
 
@@ -91,13 +81,8 @@ def _print_table(instances: Iterable[InstanceMeta]) -> None:
         print(_format_row(m))
 
 
-def _default_store() -> Store:
-    xdg = os.getenv("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
-    return Store(data_dir=os.path.join(xdg, "qemu-compose"))
-
-
 def command_ps(show_all: bool) -> int:
-    store = _default_store()
+    store = LocalStore()
     instances = _collect_instances(store)
     filtered = _filter_instances(instances, show_all)
     _print_table(filtered)

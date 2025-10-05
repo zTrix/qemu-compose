@@ -559,7 +559,7 @@ def cli():
         # Parse only the args following the "ps" command
         ps_args = ps_parser.parse_args(rest)
 
-        from .cmd.ps import command_ps
+        from .cmd.ps_command import command_ps
 
         sys.exit(command_ps(show_all=ps_args.all))
     elif args.command == "images":
