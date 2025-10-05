@@ -7,8 +7,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from .local_store import LocalStore
-from .utils.names_gen import generate_unique_name
+from qemu_compose.local_store import LocalStore
+from qemu_compose.utils.names_gen import generate_unique_name
 
 
 @dataclass(frozen=True)

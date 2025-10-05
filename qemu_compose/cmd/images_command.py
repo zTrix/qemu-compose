@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Tuple, Dict, Any
 
-from .local_store import LocalStore
+from qemu_compose.local_store import LocalStore
 
 
 def _list_subdirs(root: str) -> List[str]:

@@ -563,7 +563,7 @@ def cli():
 
         sys.exit(command_ps(show_all=ps_args.all))
     elif args.command == "images":
-        from .images_command import command_images
+        from .cmd.images_command import command_images
         sys.exit(command_images())
     elif args.command == "run":
         import argparse as _argparse
@@ -584,7 +584,7 @@ def cli():
         )
         run_args = run_parser.parse_args(rest)
 
-        from .run_command import command_run
+        from .cmd.run_command import command_run
         sys.exit(command_run(image_id=run_args.image, name=run_args.name))
     else:
         parser.print_help()
