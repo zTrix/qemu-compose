@@ -401,6 +401,7 @@ def cli():
   ps          List VM instances
   version     Show the qemu-compose version information
   images      List VM images found in local store
+  run         Create instance from image and print QEMU cmd
 """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
@@ -564,6 +565,27 @@ def cli():
     elif args.command == "images":
         from .images_command import command_images
         sys.exit(command_images())
+    elif args.command == "run":
+        import argparse as _argparse
+        run_parser = _argparse.ArgumentParser(
+            prog="qemu-compose run",
+            add_help=True,
+            description="Create an instance overlay from an image and print QEMU command",
+        )
+        run_parser.add_argument(
+            "--image",
+            required=True,
+            help="Image identifier under local image store",
+        )
+        run_parser.add_argument(
+            "--name",
+            required=False,
+            help="Instance name; auto-generated if omitted",
+        )
+        run_args = run_parser.parse_args(rest)
+
+        from .run_command import command_run
+        sys.exit(command_run(image_id=run_args.image, name=run_args.name))
     else:
         parser.print_help()
         sys.exit(1)
