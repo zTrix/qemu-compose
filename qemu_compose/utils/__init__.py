@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 import os
 
 def is_pid_running(pid: Optional[int]) -> Optional[bool]:
@@ -22,3 +22,9 @@ class StreamWrapper:
             s = s.encode()
         self.obj.write(s)
 
+
+def list_subdirs(root: str) -> List[str]:
+    try:
+        return [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
+    except FileNotFoundError:
+        return []

@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import subprocess
 from typing import Dict, List, Optional, Tuple
 
 from qemu_compose.local_store import LocalStore
 from qemu_compose.utils.names_gen import generate_unique_name
 from qemu_compose.instance import new_random_vmid
 from qemu_compose.image import ImageManifest, DiskSpec
+from qemu_compose.instance.qemu_runner import create_overlay, drive_param_for
 
 def _read_json(path: str) -> Dict:
     with open(path, "r", encoding="utf-8") as f:
@@ -85,34 +85,6 @@ def _instance_paths(store: LocalStore, vmid: str) -> Tuple[str, str]:
     inst_dir = store.instance_dir(vmid)
     return inst_dir, os.path.join(inst_dir, "instance.qcow2")
 
-def _create_overlay(base_path: str, overlay_path: str) -> int:
-    cmd = [
-        "qemu-img", "create",
-        "-b", base_path,
-        "-f", "qcow2",
-        "-F", "qcow2",
-        overlay_path,
-    ]
-    try:
-        res = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode != 0:
-            print(res.stderr)
-        return res.returncode
-    except FileNotFoundError:
-        print("Error: 'qemu-img' binary not found in PATH", flush=True)
-        return 127
-
-def _drive_param_for(overlay_path: str, spec: DiskSpec) -> str:
-    # Build a '-drive' parameter string combining manifest opts with required pieces.
-    opts = []
-    # Always use qcow2 overlay per requirement
-    opts.append(f"file={overlay_path}")
-    if spec.format:
-        opts.append("format=" + spec.format)
-    if spec.opts:
-        opts.append(spec.opts)
-    return ",".join(opts)
-
 
 def _format_qemu_cmd(manifest: ImageManifest, instance_dir: str, overlays: List[Tuple[str, DiskSpec]], name: str) -> List[str]:
     # Minimal runnable qemu command based on manifest hints. We only assemble a base command
@@ -135,7 +107,7 @@ def _format_qemu_cmd(manifest: ImageManifest, instance_dir: str, overlays: List[
 
     # Add a -drive entry for each overlay
     for overlay_path, spec in overlays:
-        base.extend(["-drive", _drive_param_for(overlay_path, spec)])
+        base.extend(["-drive", drive_param_for(overlay_path, spec)])
 
     # Allow manifest-provided extra args after our safe defaults.
     return base + qemu_args
@@ -173,7 +145,7 @@ def command_run(*, image_id: str, name: Optional[str]) -> int:
     for spec in manifest.disks:
         base_disk_path = os.path.join(image_dir, spec.filename)
         overlay_path = os.path.join(inst_dir, spec.filename)
-        rc = _create_overlay(base_disk_path, overlay_path)
+        rc = create_overlay(base_disk_path, spec.format, overlay_path)
         if rc != 0:
             return rc
         overlays.append((overlay_path, spec))

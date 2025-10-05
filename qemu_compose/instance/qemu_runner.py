@@ -1,5 +1,5 @@
-from typing import Optional, List, Dict, Any
-from dataclasses import dataclass
+from typing import Optional, List, Dict, Any, Tuple
+from dataclasses import dataclass, field
 import shutil
 import os
 import sys
@@ -14,6 +14,7 @@ from qemu_compose.instance import prepare_ssh_key
 from qemu_compose.utils.hostnames import to_valid_hostname
 from qemu_compose.utils.vsock import get_available_guest_cid
 from qemu_compose.utils import StreamWrapper
+from qemu_compose.image import ImageManifest, find_image_by_name, DiskSpec
 
 from .name import check_and_get_name
 from .http import HttpServer
@@ -22,6 +23,35 @@ from . import new_random_vmid
 
 
 logger = logging.getLogger("qemu-compose.instance.qemu_runner")
+
+
+def create_overlay(base_path: str, base_format: str, overlay_path: str) -> int:
+    cmd = [
+        "qemu-img", "create",
+        "-b", base_path,
+        "-F", base_format,
+        "-f", "qcow2",
+        overlay_path,
+    ]
+    try:
+        res = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode != 0:
+            print(res.stderr, file=sys.stderr, flush=True)
+        return res.returncode
+    except FileNotFoundError:
+        print("Error: 'qemu-img' binary not found in PATH", file=sys.stderr, flush=True)
+        return 127
+
+def drive_param_for(overlay_path: str, spec: DiskSpec) -> str:
+    # Build a '-drive' parameter string combining manifest opts with required pieces.
+    opts = []
+    # Always use qcow2 overlay per requirement
+    opts.append(f"file={overlay_path}")
+    if spec.format:
+        opts.append("format=" + spec.format)
+    if spec.opts:
+        opts.append(spec.opts)
+    return ",".join(opts)
 
 
 def extract_format_or_default(mapping: Optional[dict], key: str, env: dict, default=None):
@@ -54,12 +84,12 @@ class QemuConfig:
     binary: Optional[str] = None
     network: Optional[str] = None     # could be "none", "user", etc, default set to "user" when left None
     image: Optional[str] = None
-    env: Dict[str, str] = {}
-    qemu_args: List[Dict[str, str]] = []
-    boot_commands: List[Dict[str, Any]] = []
-    before_script: List[str] = []
-    after_script: List[str] = []
-    http_serve: Dict[str, Any] = {}
+    env: Dict[str, str] = field(default_factory=dict)
+    qemu_args: List[Dict[str, str]] = field(default_factory=list)
+    boot_commands: List[Dict[str, Any]] = field(default_factory=list)
+    before_script: List[str] = field(default_factory=list)
+    after_script: List[str] = field(default_factory=list)
+    http_serve: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "QemuConfig":
@@ -88,6 +118,8 @@ class QemuRunner(QEMUMachine):
         self.cid: Optional[int] = None
         self.vmid: Optional[str] = None
         self.log_file = None
+        self.image_manifest: Optional[ImageManifest] = None
+        self.storage_overlays: List[Tuple[str, DiskSpec]] = []
 
         if config.binary:
             binary = config.binary
@@ -110,6 +142,13 @@ class QemuRunner(QEMUMachine):
         return self.store.instance_dir(self.vmid)
 
     def check_and_lock(self) -> int:
+        if self.config.image is not None:
+            manifest = find_image_by_name(self.store.image_root, self.config.image)
+            if manifest is None:
+                print(f"Image '{self.config.image}' not found in local store", file=sys.stderr)
+                return 126
+            self.image_manifest = manifest
+
         try:
             self.vm_name = check_and_get_name(self.store.instance_root, self.config.name)
         except ValueError as e:
@@ -159,7 +198,15 @@ class QemuRunner(QEMUMachine):
             'STORAGE_PATH': self.store.data_dir,
             'IMAGE_ROOT': self.store.image_root,
             'INSTANCE_ROOT': self.store.instance_root,
+            'INSTANCE_DIR': self.instance_dir,
         }
+
+        if self.config.image:
+            env['IMAGE_TAG'] = self.config.image
+
+        if self.image_manifest is not None:
+            env["IMAGE_DIR"] = os.path.join(self.store.image_root, self.image_manifest.id)
+            env["IMAGE_ID"] = self.image_manifest.id
 
         if self.config.env:
             for k in self.config.env:
@@ -189,6 +236,25 @@ class QemuRunner(QEMUMachine):
 
         self.env = env
 
+    def prepare_storage(self):
+        if self.image_manifest is None:
+            return 0
+        
+        image_dir = os.path.join(self.store.image_root, self.image_manifest.id)
+
+        self.storage_overlays = []
+
+        for disk_spec in self.image_manifest.disks:
+            base_disk_path = os.path.join(image_dir, disk_spec.filename)
+            overlay_path = os.path.join(self.instance_dir, disk_spec.filename)
+            rc = create_overlay(base_disk_path, disk_spec.format, overlay_path)
+            if rc != 0:
+                print(f"Failed to create overlay for disk {disk_spec.filename}", file=sys.stderr, flush=True)
+                return rc
+            self.storage_overlays.append((overlay_path, disk_spec))
+
+        return 0
+
     def execute_script(self, script_key: str):
         script_target = getattr(self.config, script_key, None)
 
@@ -199,6 +265,7 @@ class QemuRunner(QEMUMachine):
                     subprocess.run(command.strip(), shell=True, check=True)
 
     def setup_qemu_args(self):
+        # the very default args
         default_args = {
             'cpu': 'max',
             'machine': 'type=q35,hpet=off',
@@ -207,6 +274,15 @@ class QemuRunner(QEMUMachine):
             'smp': str(os.cpu_count()),
         }
 
+        # image provided args override our defaults
+        if self.image_manifest is not None and self.image_manifest.qemu_args:
+            for a in self.image_manifest.qemu_args:
+                if not a.startswith('-'):
+                    continue
+                if a[1:] in default_args:
+                    default_args.pop(a[1:], None)
+
+        # user provided args override image defaults
         for block in self.config.qemu_args:
             for key in block:
                 val = extract_format_or_default(block, key, self.env)
@@ -214,23 +290,21 @@ class QemuRunner(QEMUMachine):
                     default_args[key] = val
 
         args = []
+
+        # vm name first
+        if self.vm_name:
+            args.append('-name')
+            args.append(self.vm_name)
+
+        # then our safe defaults
         for key in default_args:
             args.append('-' + key)
             args.append(default_args[key])
 
-        for block in self.config.qemu_args:
-            for key in block:
-                val = extract_format_or_default(block, key, self.env)
-                if key in default_args:
-                    continue
-                args.append('-' + key)
-                if val is not None:
-                    args.append(val)
+        # then network setup
 
         hostname = None
         if self.vm_name:
-            args.append('-name')
-            args.append(self.vm_name)
             hostname = to_valid_hostname(self.vm_name)
 
         if hostname:
@@ -257,6 +331,29 @@ class QemuRunner(QEMUMachine):
         args.append('-smbios')
         args.append(f'type=11,value=io.systemd.credential.binary:ssh.authorized_keys.root={pub_b64}')
 
+        # storage disks
+        for overlay_path, spec in self.storage_overlays:
+            drive_param = drive_param_for(overlay_path, spec)
+            args.append('-drive')
+            args.append(drive_param)
+
+        # image provided args append after defaults
+        if self.image_manifest is not None and self.image_manifest.qemu_args:
+            for arg in self.image_manifest.qemu_args:
+                val = extract_format_or_default(None, arg, self.env)
+                args.append(val)
+
+        # user provided args append after defaults
+        for block in self.config.qemu_args:
+            for key in block:
+                val = extract_format_or_default(block, key, self.env)
+                if key in default_args:
+                    continue
+                args.append('-' + key)
+                if val is not None:
+                    args.append(val)
+
+        self.add_args(*args)
 
     def start(self):
         self.launch()

@@ -28,6 +28,10 @@ def run(config_path, env_update=None):
         return exit_code
 
     vm.prepare_env(env_update=env_update)
+
+    if (exit_code := vm.prepare_storage()) > 0:
+        return exit_code
+
     vm.execute_script('before_script')
     vm.setup_qemu_args()
 
