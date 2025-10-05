@@ -128,7 +128,7 @@ def _rows_for_image(image_root: str, image_id: str) -> List[Tuple[str, str, str,
     size_bytes = _size_from_manifest(dir_path, manifest)
     size_human = _format_size(size_bytes)
 
-    tags: Iterable[str] = manifest.get("tags") or []
+    tags: Iterable[str] = manifest.get("repo_tags") or []
     # If no tags present, still emit one row with <none>/<none>
     tag_list = list(tags) if isinstance(tags, list) else []
     tag_list = tag_list if tag_list else ["<none>:<none>"]

@@ -2,7 +2,7 @@
   "architecture": "amd64",
   "os": "linux",
   "created": "2025-10-04T16:39:41.190005011Z",
-  "tags": [
+  "repo_tags": [
     "devbox:archlinux-20251004.1"
   ],
   "disks": [
