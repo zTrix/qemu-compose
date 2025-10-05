@@ -401,7 +401,7 @@ def cli():
   ps          List VM instances
   version     Show the qemu-compose version information
   images      List VM images found in local store
-  run         Create instance from image and print QEMU cmd
+  run         Create and run a new VM from an image
 """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
