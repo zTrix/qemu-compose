@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 from qemu_compose.local_store import LocalStore
 from qemu_compose.utils.names_gen import generate_unique_name
+from qemu_compose.instance import new_random_vmid
 
 
 @dataclass(frozen=True)
@@ -191,7 +192,7 @@ def command_run(*, image_id: str, name: Optional[str]) -> int:
 
     # Resolve name and vmid
     name = _choose_name(name, store.instance_root)
-    vmid = store.new_random_vmid()
+    vmid = new_random_vmid(store.instance_root)
     inst_dir, _ = _instance_paths(store, vmid)
     _ensure_dir(inst_dir)
 

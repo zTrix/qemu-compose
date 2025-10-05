@@ -1,7 +1,21 @@
 
 import os
+import random
 
 from Crypto.PublicKey import ECC
+
+def new_random_vmid(instance_root:str, charset=None, length=12) -> str:
+    # FIXME: add lock later
+
+    if charset is None:
+        charset = "23456789abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ"
+
+    while True:
+        vmid = "".join(random.choices(charset, k=length))
+        path = os.path.join(instance_root, vmid)
+        if not os.path.exists(path):
+            os.makedirs(path)
+            return vmid
 
 def prepare_ssh_key(instance_dir:str, vmid:str) -> bytes:
     priv_key_path = os.path.join(instance_dir, "ssh-key")
