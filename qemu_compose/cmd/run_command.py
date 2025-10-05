@@ -65,10 +65,6 @@ def _parse_manifest(image_root: str, image_id: str) -> ImageManifest:
     return manifest
 
 
-def _image_exists(image_root: str, image_id: str) -> bool:
-    return os.path.isdir(os.path.join(image_root, image_id))
-
-
 def _list_image_ids(image_root: str) -> List[str]:
     try:
         return [d for d in os.listdir(image_root) if os.path.isdir(os.path.join(image_root, d))]
@@ -93,7 +89,6 @@ def _read_manifest_repo_tags(image_root: str, image_id: str) -> List[str]:
         return [str(t) for t in tags if isinstance(t, str)]
     except Exception:
         return []
-
 
 def _resolve_image_by_repo_tag(image_root: str, token: str) -> Tuple[Optional[str], List[str]]:
     ids = _list_image_ids(image_root)
