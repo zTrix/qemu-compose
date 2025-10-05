@@ -145,8 +145,7 @@ def cli():
                 return name_index[ident], [name_index[ident]]
 
             id_matches = [i for i in ids if i.startswith(ident)]
-            name_matches = [name_index[n] for n in name_index.keys() if n.startswith(ident)]
-            candidates = sorted(set(id_matches + name_matches))
+            candidates = id_matches
 
             if len(candidates) == 1:
                 return candidates[0], candidates
@@ -159,6 +158,7 @@ def cli():
 
             base: List[str] = [
                 "ssh",
+                "-S", "none",
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null",
                 "-i", key_path,
@@ -250,14 +250,14 @@ def cli():
             description="Create an instance overlay from an image and print QEMU command",
         )
         run_parser.add_argument(
-            "--image",
-            required=True,
-            help="Image identifier under local image store",
-        )
-        run_parser.add_argument(
             "--name",
             required=False,
             help="Instance name; auto-generated if omitted",
+        )
+        run_parser.add_argument(
+            "image",
+            type=str,
+            help="Image identifier",
         )
         run_args = run_parser.parse_args(rest)
 
