@@ -64,6 +64,10 @@ def _parse_manifest(image_root: str, image_id: str) -> ImageManifest:
     return manifest
 
 
+def _image_exists(image_root: str, image_id: str) -> bool:
+    return os.path.isdir(os.path.join(image_root, image_id))
+
+
 def _instance_paths(store: LocalStore, vmid: str) -> Tuple[str, str]:
     inst_dir = store.instance_dir(vmid)
     return inst_dir, os.path.join(inst_dir, "instance.qcow2")
@@ -154,6 +158,9 @@ def command_run(*, image_id: str, name: Optional[str]) -> int:
     _ensure_dir(inst_dir)
 
     # Parse manifest
+    if not _image_exists(store.image_root, image_id):
+        print(f"Error: image not found: {os.path.join(store.image_root, image_id)}", flush=True)
+        return 1
     manifest_obj = _parse_manifest(store.image_root, image_id)
     manifest = manifest_obj.manifest
 
