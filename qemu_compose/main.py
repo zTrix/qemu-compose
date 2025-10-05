@@ -19,8 +19,8 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from .qemu.machine import QEMUMachine
 from .qemu.machine.machine import AbnormalShutdown
 from .local_store import LocalStore
-from .vsock import get_available_guest_cid
 
+from .utils.vsock import get_available_guest_cid
 from .utils.zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
 from .utils.names_gen import generate_unique_name
 from .utils.hostnames import to_valid_hostname
