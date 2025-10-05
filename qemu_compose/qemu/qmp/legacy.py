@@ -86,7 +86,7 @@ class QEMUMonitorProtocol:
                 "server argument should be False when passing a socket")
 
         self._qmp = QMPClient(nickname)
-        self._aloop = asyncio.get_event_loop()
+        self._aloop = asyncio.new_event_loop()
         self._address = address
         self._timeout: Optional[float] = None
 
