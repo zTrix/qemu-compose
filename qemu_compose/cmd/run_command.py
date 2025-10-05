@@ -105,12 +105,13 @@ def _create_overlay(base_path: str, overlay_path: str) -> int:
 
 def _drive_param_for(overlay_path: str, spec: DiskSpec) -> str:
     # Build a '-drive' parameter string combining manifest opts with required pieces.
-    opts = list(spec.opts)
-    if not any(o.startswith("if=") for o in opts):
-        opts.insert(0, "if=virtio")
+    opts = []
     # Always use qcow2 overlay per requirement
-    opts.append("format=qcow2")
     opts.append(f"file={overlay_path}")
+    if spec.format:
+        opts.append("format=" + spec.format)
+    if spec.opts:
+        opts.append(spec.opts)
     return ",".join(opts)
 
 
