@@ -18,13 +18,13 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 from .qemu.machine import QEMUMachine
 from .qemu.machine.machine import AbnormalShutdown
-from .jsonlisp import default_env, interp
 from .local_store import LocalStore
-from .vsock import get_available_guest_cid
 
-from .zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
+from .utils.vsock import get_available_guest_cid
+from .utils.zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
 from .utils.names_gen import generate_unique_name
 from .utils.hostnames import to_valid_hostname
+from .utils.jsonlisp import default_env, interp
 
 
 logger = logging.getLogger("qemu-compose")
@@ -401,6 +401,7 @@ def cli():
   ps          List VM instances
   version     Show the qemu-compose version information
   images      List VM images found in local store
+  run         Create and run a new VM from an image
 """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
@@ -558,12 +559,33 @@ def cli():
         # Parse only the args following the "ps" command
         ps_args = ps_parser.parse_args(rest)
 
-        from .ps import command_ps
+        from .cmd.ps import command_ps
 
         sys.exit(command_ps(show_all=ps_args.all))
     elif args.command == "images":
-        from .images_command import command_images
+        from .cmd.images_command import command_images
         sys.exit(command_images())
+    elif args.command == "run":
+        import argparse as _argparse
+        run_parser = _argparse.ArgumentParser(
+            prog="qemu-compose run",
+            add_help=True,
+            description="Create an instance overlay from an image and print QEMU command",
+        )
+        run_parser.add_argument(
+            "--image",
+            required=True,
+            help="Image identifier under local image store",
+        )
+        run_parser.add_argument(
+            "--name",
+            required=False,
+            help="Instance name; auto-generated if omitted",
+        )
+        run_args = run_parser.parse_args(rest)
+
+        from .cmd.run_command import command_run
+        sys.exit(command_run(image_id=run_args.image, name=run_args.name))
     else:
         parser.print_help()
         sys.exit(1)
