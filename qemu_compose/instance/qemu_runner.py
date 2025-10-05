@@ -14,7 +14,7 @@ from qemu_compose.instance import prepare_ssh_key
 from qemu_compose.utils.hostnames import to_valid_hostname
 from qemu_compose.utils.vsock import get_available_guest_cid
 from qemu_compose.utils import StreamWrapper
-from qemu_compose.image import ImageManifest, find_image_by_name, DiskSpec
+from qemu_compose.image import ImageManifest, load_image_by_id, load_image_by_name, DiskSpec
 
 from .name import check_and_get_name
 from .http import HttpServer
@@ -143,7 +143,11 @@ class QemuRunner(QEMUMachine):
 
     def check_and_lock(self) -> int:
         if self.config.image is not None:
-            manifest = find_image_by_name(self.store.image_root, self.config.image)
+            manifest = load_image_by_id(self.store.image_root, self.config.image)
+
+            if manifest is None:
+                manifest = load_image_by_name(self.store.image_root, self.config.image)
+
             if manifest is None:
                 print(f"Image '{self.config.image}' not found in local store", file=sys.stderr)
                 return 126

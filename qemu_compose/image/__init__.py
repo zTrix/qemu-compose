@@ -49,11 +49,37 @@ def _rows_for_image(image_root: str, image_id: str) -> List[Tuple[str, str, str,
 def list_image(image_root: str) -> List[Tuple[str, str, str, str, str]]:
     return [row for image_id in list_subdirs(image_root) for row in _rows_for_image(image_root, image_id)]
 
-def find_image_by_name(image_root: str, name: str) -> Optional[ImageManifest]:
+def load_image_by_id(image_root: str, image_id: str) -> Optional[ImageManifest]:
+    dir_path = os.path.join(image_root, image_id)
+    if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
+        return None
+    return ImageManifest.load_file(dir_path)
+
+def load_image_by_name(image_root: str, name: str) -> Optional[ImageManifest]:
     for image_id in list_subdirs(image_root):
         dir_path = os.path.join(image_root, image_id)
+        if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
+            continue
+
         manifest = ImageManifest.load_file(dir_path)
 
         if manifest.has_repo_tag(name):
             return manifest
     return None
+
+def resolve_image_by_prefix(image_root: str, token: str) -> Tuple[Optional[str], List[str]]:
+    ids = list_subdirs(image_root)
+    if token in ids:
+        return token, [token]
+
+    matches = [i for i in ids if i.startswith(token)]
+    if len(matches) == 1:
+        return matches[0], matches
+
+    return None, matches
+
+def resolve_image(image_root: str, token: str):
+    if (found := load_image_by_name(image_root, token)):
+        return found.id, [found.id]
+    
+    return resolve_image_by_prefix(image_root, token)

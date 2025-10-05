@@ -262,7 +262,7 @@ def cli():
         run_args = run_parser.parse_args(rest)
 
         from .cmd.run_command import command_run
-        sys.exit(command_run(image_id=run_args.image, name=run_args.name))
+        sys.exit(command_run(image_hint=run_args.image, name=run_args.name))
     else:
         parser.print_help()
         sys.exit(1)
