@@ -400,6 +400,7 @@ def cli():
   ssh         Run ssh with instance key
   ps          List VM instances
   version     Show the qemu-compose version information
+  images      List VM images found in local store
 """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
@@ -560,6 +561,9 @@ def cli():
         from .ps import command_ps
 
         sys.exit(command_ps(show_all=ps_args.all))
+    elif args.command == "images":
+        from .images_command import command_images
+        sys.exit(command_images())
     else:
         parser.print_help()
         sys.exit(1)
