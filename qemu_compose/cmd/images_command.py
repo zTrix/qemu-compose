@@ -51,7 +51,7 @@ def _rows_for_image(image_root: str, image_id: str) -> List[Tuple[str, str, str,
 
     manifest = ImageManifest.load_file(dir_path)
 
-    created_human = humanize_age(manifest.created_dt)
+    created_human = humanize_age(manifest.created)
     image_id_short = _short_image_id(manifest.digest)
 
     size_bytes = _size_from_manifest(dir_path, manifest)
