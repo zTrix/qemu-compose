@@ -9,13 +9,9 @@
   "disks": [
     ["disk.qcow2", "qcow2", "if=virtio"]
   ],
-  "qemu_config": {
-    "kernel": "kernel",
-    "initrd": null
-  },
   "qemu_args": [
     "-bios", "/usr/share/ovmf/x64/OVMF.4m.fd",
-    "-kernel", "{INSTANCE_DIR}/kernel",
+    "-kernel", "{IMAGE_DIR}/kernel",
     "-append", "rw root=/dev/vda3 console=ttyS0"
   ],
   "digest": "sha256:bc94e487ff9ea43c6a83c9d6a34dc1b5f7eaf1e335c4978c2bef76099c93dab1",

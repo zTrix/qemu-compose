@@ -1,96 +1,85 @@
-from typing import List, Any, Optional, Dict
-import datetime
+from typing import List, Optional, Tuple
 import os
-import json
-from dataclasses import dataclass
 
-from qemu_compose.utils.utcdatetime import parse_datetime
+from qemu_compose.utils.human_readable import humanize_age, human_readable_size
+from qemu_compose.utils import list_subdirs
 
-@dataclass(frozen=True)
-class DiskSpec:
-    filename: str
-    format: str
-    opts: str
+from .manifest import ImageManifest, RepoTag, DiskSpec
 
-    @classmethod
-    def from_array(cls, a: List[str]) -> "DiskSpec":
-        if len(a) == 0:
-            return None
-        fmt = a[1] if len(a) > 1 else "qcow2"
-        opts = a[2] if len(a) > 2 else ""
-        return DiskSpec(filename=a[0], format=fmt, opts=opts)
 
-@dataclass(frozen=True)
-class RepoTag:
-    repo: str
-    tag: str
 
-    @classmethod
-    def from_str(cls, s:str) -> "RepoTag":
-        if ':' in s:
-            r, t = s.split(':', maxsplit=1)
-            return RepoTag(repo=r, tag=t)
-        else:
-            return RepoTag(repo=s, tag='latest')
+def _short_image_id(digest: Optional[str]) -> str:
+    if not digest:
+        return "<none>"
+    if digest.startswith("sha256:"):
+        return digest.split(":", 1)[1][:12]
+    # Fallback: first 12 chars
+    return digest[:12]
 
-@dataclass(frozen=True)
-class ImageManifest:
-    id: str
-    architecture: str
-    os: str
-    created: datetime.datetime
-    repo_tags: List[RepoTag]
-    disks: List[DiskSpec]
-    qemu_config: Dict[str, Any]
-    qemu_args: List[str]
-    digest: str
-    comment: Optional[str]
+def _file_size(path: str) -> int:
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
 
-    @classmethod
-    def load_file(cls, image_dir: str) -> "ImageManifest":
-        with open(os.path.join(image_dir, "manifest.json")) as f:
-            obj = json.load(f)
-        return cls.from_dict(obj)
 
-    @classmethod
-    def from_dict(cls, obj: dict) -> "ImageManifest":
+def _size_from_manifest(image_dir: str, manifest: ImageManifest) -> int:
+    disks = manifest.disks
+    if isinstance(disks, list):
+        return sum(_file_size(os.path.join(image_dir, f.filename)) for f in disks if isinstance(f, DiskSpec))
+    return 0
 
-        image_id = str(obj.get("id") or "")
+def _rows_for_image(image_root: str, image_id: str) -> List[Tuple[str, str, str, str, str]]:
+    dir_path = os.path.join(image_root, image_id)
 
-        architecture = str(obj.get("architecture") or "")
-        os_name = str(obj.get("os") or "")
-        created = parse_datetime(obj.get("created"))
+    manifest = ImageManifest.load_file(dir_path)
 
-        repo_tags_raw = obj.get("repo_tags") or []
-        repo_tags = [RepoTag.from_str(t) for t in repo_tags_raw if isinstance(t, str)]
+    created_human = humanize_age(manifest.created)
+    image_id_short = _short_image_id(manifest.digest)
 
-        disks_raw = obj.get("disks") or []
-        disks: List[DiskSpec] = []
-        for item in disks_raw:
-            if isinstance(item, list):
-                ds = DiskSpec.from_array(item)
-                if ds:
-                    disks.append(ds)
+    size_bytes = _size_from_manifest(dir_path, manifest)
+    size_human = human_readable_size(size_bytes)
 
-        qemu_config_raw = obj.get("qemu_config")
-        qemu_config: Dict[str, Any] = qemu_config_raw if isinstance(qemu_config_raw, dict) else {}
+    def to_row(repo_tag: RepoTag) -> Tuple[str, str, str, str, str]:
+        return (repo_tag.repo or "<none>", repo_tag.tag or "<none>", image_id_short, created_human, size_human)
 
-        qemu_args_raw = obj.get("qemu_args") or []
-        qemu_args = [str(a) for a in qemu_args_raw if isinstance(a, (str, int, float))]
+    return [to_row(t) for t in manifest.repo_tags]
 
-        digest = str(obj.get("digest") or "")
-        comment_val = obj.get("comment")
-        comment = str(comment_val) if isinstance(comment_val, (str, int, float)) else None
 
-        return cls(
-            id=image_id,
-            architecture=architecture,
-            os=os_name,
-            created=created,
-            repo_tags=repo_tags,
-            disks=disks,
-            qemu_config=qemu_config,
-            qemu_args=qemu_args,
-            digest=digest,
-            comment=comment,
-        )
+def list_image(image_root: str) -> List[Tuple[str, str, str, str, str]]:
+    return [row for image_id in list_subdirs(image_root) for row in _rows_for_image(image_root, image_id)]
+
+def load_image_by_id(image_root: str, image_id: str) -> Optional[ImageManifest]:
+    dir_path = os.path.join(image_root, image_id)
+    if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
+        return None
+    return ImageManifest.load_file(dir_path)
+
+def load_image_by_name(image_root: str, name: str) -> Optional[ImageManifest]:
+    for image_id in list_subdirs(image_root):
+        dir_path = os.path.join(image_root, image_id)
+        if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
+            continue
+
+        manifest = ImageManifest.load_file(dir_path)
+
+        if manifest.has_repo_tag(name):
+            return manifest
+    return None
+
+def resolve_image_by_prefix(image_root: str, token: str) -> Tuple[Optional[str], List[str]]:
+    ids = list_subdirs(image_root)
+    if token in ids:
+        return token, [token]
+
+    matches = [i for i in ids if i.startswith(token)]
+    if len(matches) == 1:
+        return matches[0], matches
+
+    return None, matches
+
+def resolve_image(image_root: str, token: str):
+    if (found := load_image_by_name(image_root, token)):
+        return found.id, [found.id]
+    
+    return resolve_image_by_prefix(image_root, token)

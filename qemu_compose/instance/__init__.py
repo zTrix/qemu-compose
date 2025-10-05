@@ -1,12 +1,10 @@
-
+from typing import List
 import os
 import random
 
 from Crypto.PublicKey import ECC
 
 def new_random_vmid(instance_root:str, charset=None, length=12) -> str:
-    # FIXME: add lock later
-
     if charset is None:
         charset = "23456789abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ"
 
@@ -14,7 +12,6 @@ def new_random_vmid(instance_root:str, charset=None, length=12) -> str:
         vmid = "".join(random.choices(charset, k=length))
         path = os.path.join(instance_root, vmid)
         if not os.path.exists(path):
-            os.makedirs(path)
             return vmid
 
 def prepare_ssh_key(instance_dir:str, vmid:str) -> bytes:
@@ -45,3 +42,12 @@ def prepare_ssh_key(instance_dir:str, vmid:str) -> bytes:
         pf.write(pub_bytes)
 
     return pub_bytes
+
+
+def list_instance_ids(instance_root:str) -> List[str]:
+    try:
+        return sorted(
+            [d for d in os.listdir(instance_root) if os.path.isdir(os.path.join(instance_root, d))]
+        )
+    except FileNotFoundError:
+        return []
