@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Tuple, Dict, Any
 
 from qemu_compose.local_store import LocalStore
+from qemu_compose.utils.human_readable import human_readable_size
 
 
 def _list_subdirs(root: str) -> List[str]:
@@ -105,17 +106,6 @@ def _size_from_manifest(image_dir: str, manifest: Dict[str, Any]) -> int:
         return sum(_file_size(os.path.join(image_dir, f)) for f in files if isinstance(f, str))
     return 0
 
-
-def _format_size(num_bytes: int) -> str:
-    units = ["B", "KB", "MB", "GB", "TB"]
-    size = float(num_bytes)
-    for unit in units:
-        if size < 1024.0 or unit == units[-1]:
-            return f"{size:.1f}{unit}"
-        size /= 1024.0
-    return f"{size:.1f}TB"
-
-
 def _rows_for_image(image_root: str, image_id: str) -> List[Tuple[str, str, str, str, str]]:
     dir_path = os.path.join(image_root, image_id)
     manifest = _read_manifest(os.path.join(dir_path, "manifest.json"))
@@ -126,7 +116,7 @@ def _rows_for_image(image_root: str, image_id: str) -> List[Tuple[str, str, str,
     created_human = _humanize_age(created_dt)
     image_id_short = _short_image_id(manifest.get("digest"))
     size_bytes = _size_from_manifest(dir_path, manifest)
-    size_human = _format_size(size_bytes)
+    size_human = human_readable_size(size_bytes)
 
     tags: Iterable[str] = manifest.get("repo_tags") or []
     # If no tags present, still emit one row with <none>/<none>
