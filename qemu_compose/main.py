@@ -19,6 +19,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from .qemu.machine import QEMUMachine
 from .qemu.machine.machine import AbnormalShutdown
 from .local_store import LocalStore
+from .instance import prepare_ssh_key
 
 from .utils.vsock import get_available_guest_cid
 from .utils.zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
@@ -307,12 +308,10 @@ def run(config_path, log_path=None, env_update=None):
         args.append("-device")
         args.append("vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=%d" % cid)
 
-    store.prepare_ssh_key(vmid)
-
-    with open(store.instance_ssh_key_pub_path(vmid), 'rb') as pf:
-        pub_bytes = pf.read()
+    pub_bytes = prepare_ssh_key(store.instance_dir(vmid), vmid)
 
     pub_b64 = base64.b64encode(pub_bytes).decode('ascii')
+
     args.append('-smbios')
     args.append(f'type=11,value=io.systemd.credential.binary:ssh.authorized_keys.root={pub_b64}')
 
