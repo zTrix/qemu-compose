@@ -68,6 +68,44 @@ def _image_exists(image_root: str, image_id: str) -> bool:
     return os.path.isdir(os.path.join(image_root, image_id))
 
 
+def _list_image_ids(image_root: str) -> List[str]:
+    try:
+        return [d for d in os.listdir(image_root) if os.path.isdir(os.path.join(image_root, d))]
+    except FileNotFoundError:
+        return []
+
+
+def _resolve_image_by_prefix(image_root: str, token: str) -> Tuple[Optional[str], List[str]]:
+    ids = _list_image_ids(image_root)
+    if token in ids:
+        return token, [token]
+    matches = [i for i in ids if i.startswith(token)]
+    if len(matches) == 1:
+        return matches[0], matches
+    return None, matches
+
+
+def _read_manifest_repo_tags(image_root: str, image_id: str) -> List[str]:
+    try:
+        manifest = _read_json(os.path.join(image_root, image_id, "manifest.json"))
+        tags = manifest.get("repo_tags") or []
+        return [str(t) for t in tags if isinstance(t, str)]
+    except Exception:
+        return []
+
+
+def _resolve_image_by_repo_tag(image_root: str, token: str) -> Tuple[Optional[str], List[str]]:
+    ids = _list_image_ids(image_root)
+    matches: List[str] = []
+    for i in ids:
+        tags = _read_manifest_repo_tags(image_root, i)
+        if token in tags:
+            matches.append(i)
+    if len(matches) == 1:
+        return matches[0], matches
+    return None, matches
+
+
 def _instance_paths(store: LocalStore, vmid: str) -> Tuple[str, str]:
     inst_dir = store.instance_dir(vmid)
     return inst_dir, os.path.join(inst_dir, "instance.qcow2")
@@ -157,11 +195,21 @@ def command_run(*, image_id: str, name: Optional[str]) -> int:
     inst_dir, _ = _instance_paths(store, vmid)
     _ensure_dir(inst_dir)
 
-    # Parse manifest
-    if not _image_exists(store.image_root, image_id):
-        print(f"Error: image not found: {os.path.join(store.image_root, image_id)}", flush=True)
-        return 1
-    manifest_obj = _parse_manifest(store.image_root, image_id)
+    # Resolve image id: exact, unique prefix, or repo_tag
+    resolved_id, prefix_matches = _resolve_image_by_prefix(store.image_root, image_id)
+    if resolved_id is None:
+        resolved_id, tag_matches = _resolve_image_by_repo_tag(store.image_root, image_id)
+        if resolved_id is None:
+            if prefix_matches or tag_matches:
+                preview = ", ".join(sorted(set(prefix_matches + tag_matches))[:8])
+                more = "" if len(set(prefix_matches + tag_matches)) <= 8 else f" ... and {len(set(prefix_matches + tag_matches))-8} more"
+                print(f"Error: image identifier '{image_id}' is ambiguous; matches: {preview}{more}", flush=True)
+            else:
+                print(f"Error: image not found: {image_id}", flush=True)
+            return 1
+
+    # Parse manifest of the resolved image id
+    manifest_obj = _parse_manifest(store.image_root, resolved_id)
     manifest = manifest_obj.manifest
 
     # Compute and create overlays for each disk
