@@ -7,6 +7,20 @@ from dataclasses import dataclass
 from qemu_compose.utils.utcdatetime import parse_datetime
 
 @dataclass(frozen=True)
+class DiskSpec:
+    filename: str
+    format: str
+    opts: str
+
+    @classmethod
+    def from_array(cls, a: List[str]) -> "DiskSpec":
+        if len(a) == 0:
+            return None
+        fmt = a[1] if len(a) > 1 else "qcow2"
+        opts = a[2] if len(a) > 2 else ""
+        return DiskSpec(filename=a[0], format=fmt, opts=opts)
+
+@dataclass(frozen=True)
 class RepoTag:
     repo: str
     tag: str
@@ -26,7 +40,7 @@ class ImageManifest:
     os: str
     created: datetime.datetime
     repo_tags: List[RepoTag]
-    disks: List[List[str]]
+    disks: List[DiskSpec]
     qemu_config: Dict[str, Any]
     qemu_args: List[str]
     digest: str
@@ -51,10 +65,12 @@ class ImageManifest:
         repo_tags = [RepoTag.from_str(t) for t in repo_tags_raw if isinstance(t, str)]
 
         disks_raw = obj.get("disks") or []
-        disks: List[List[str]] = []
+        disks: List[DiskSpec] = []
         for item in disks_raw:
             if isinstance(item, list):
-                disks.append([str(x) for x in item])
+                ds = DiskSpec.from_array(item)
+                if ds:
+                    disks.append(ds)
 
         qemu_config_raw = obj.get("qemu_config")
         qemu_config: Dict[str, Any] = qemu_config_raw if isinstance(qemu_config_raw, dict) else {}

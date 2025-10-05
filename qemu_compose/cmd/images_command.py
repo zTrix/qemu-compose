@@ -4,7 +4,7 @@ import os
 
 from qemu_compose.local_store import LocalStore
 from qemu_compose.utils.human_readable import human_readable_size, humanize_age
-from qemu_compose.image import ImageManifest, RepoTag
+from qemu_compose.image import ImageManifest, RepoTag, DiskSpec
 
 def _list_subdirs(root: str) -> List[str]:
     try:
@@ -32,18 +32,7 @@ def _file_size(path: str) -> int:
 def _size_from_manifest(image_dir: str, manifest: ImageManifest) -> int:
     disks = manifest.disks
     if isinstance(disks, list):
-        # Each entry may be [filename, ...] or dict with name
-        def file_of(entry: Any) -> Optional[str]:
-            if isinstance(entry, list) and entry:
-                return entry[0]
-            if isinstance(entry, dict):
-                name = entry.get("file") or entry.get("name")
-                if isinstance(name, str):
-                    return name
-            return None
-
-        files = [file_of(d) for d in disks]
-        return sum(_file_size(os.path.join(image_dir, f)) for f in files if isinstance(f, str))
+        return sum(_file_size(os.path.join(image_dir, f.filename)) for f in disks if isinstance(f, DiskSpec))
     return 0
 
 def _rows_for_image(image_root: str, image_id: str) -> List[Tuple[str, str, str, str, str]]:
