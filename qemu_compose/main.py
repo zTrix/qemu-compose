@@ -255,6 +255,13 @@ def cli():
             help="Instance name; auto-generated if omitted",
         )
         run_parser.add_argument(
+            "-p", "--publish",
+            dest="publish",
+            action="append",
+            default=[],
+            help="Publish a port, format: host_ip:host_port:vm_port[/proto] or host_port:vm_port[/proto]; repeatable",
+        )
+        run_parser.add_argument(
             "image",
             type=str,
             help="Image identifier",
@@ -262,7 +269,7 @@ def cli():
         run_args = run_parser.parse_args(rest)
 
         from .cmd.run_command import command_run
-        sys.exit(command_run(image_hint=run_args.image, name=run_args.name))
+        sys.exit(command_run(image_hint=run_args.image, name=run_args.name, publish=run_args.publish))
     else:
         parser.print_help()
         sys.exit(1)
