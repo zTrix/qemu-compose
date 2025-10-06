@@ -86,6 +86,7 @@ class QemuConfig:
     image: Optional[str] = None
     env: Dict[str, str] = field(default_factory=dict)
     qemu_args: List[Dict[str, str]] = field(default_factory=list)
+    ports: List[str] = field(default_factory=list)
     boot_commands: List[Dict[str, Any]] = field(default_factory=list)
     before_script: List[str] = field(default_factory=list)
     after_script: List[str] = field(default_factory=list)
@@ -100,6 +101,7 @@ class QemuConfig:
             image=d.get("image"),
             env=d.get("env", []),
             qemu_args=d.get("qemu_args", []),
+            ports=d.get("ports", []),
             boot_commands=d.get("boot_commands", []),
             before_script=d.get("before_script", []),
             after_script=d.get("after_script", []),
@@ -316,11 +318,33 @@ class QemuRunner(QEMUMachine):
             args.append('-smbios')
             args.append('type=11,value=io.systemd.credential:system.hostname=' + hostname)
 
+        def parse_port_spec(spec: str) -> Optional[Tuple[str, str, str]]:
+            parts = [p.strip() for p in spec.split(':')]
+            if len(parts) == 3:
+                return parts[0], parts[1], parts[2]
+            if len(parts) == 2:
+                return '', parts[0], parts[1]
+            return None
+
+        def format_hostfwd(triplet: Tuple[str, str, str]) -> str:
+            host_ip, host_port, vm_port = triplet
+            return f",hostfwd=:{host_ip}:{host_port}-:{vm_port}"
+
+        def hostfwd_segments(ports: List[str]) -> str:
+            return ''.join(
+                map(
+                    format_hostfwd,
+                    filter(None, map(parse_port_spec, ports))
+                )
+            )
+
         if self.config.network is None or self.config.network.lower() == 'user':
             # add user network
             args.append('-netdev')
             # https://man.archlinux.org/man/qemu.1.en#hostname=name
-            args.append('user,id=user.qemu-compose%s' % (',hostname=' + hostname if hostname else '',))
+            base = 'user,id=user.qemu-compose%s' % (',hostname=' + hostname if hostname else '',)
+            netdev_opts = base + hostfwd_segments(self.config.ports or [])
+            args.append(netdev_opts)
             args.append('-device')
             args.append('virtio-net,netdev=user.qemu-compose')
 
