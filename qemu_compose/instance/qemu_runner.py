@@ -375,9 +375,9 @@ class QemuRunner(QEMUMachine):
 
         def start_virtiofsd(shared_dir: str, socket_path: str, read_only: bool) -> Optional[subprocess.Popen]:
             unshare_bin = shutil.which('unshare')
-            virtiofsd_bin = shutil.which('virtiofsd')
-            if virtiofsd_bin is None:
-                logger.warning("virtiofsd not found; volume '%s' will not be available", shared_dir)
+            virtiofsd_bin = shutil.which('virtiofsd', path="/usr/lib:/usr/libexec")
+            if virtiofsd_bin is None or unshare_bin is None:
+                logger.warning("virtiofsd or unshare command not found; volume '%s' will not be available", shared_dir)
                 return None
             # Prefer running virtiofsd under unshare with userns mapping when available
             if unshare_bin is not None:
