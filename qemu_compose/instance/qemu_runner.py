@@ -5,6 +5,7 @@ import os
 import sys
 import base64
 import fcntl
+import shlex
 import logging
 import subprocess
 import time
@@ -375,6 +376,7 @@ class QemuRunner(QEMUMachine):
 
         def start_virtiofsd(shared_dir: str, socket_path: str, read_only: bool) -> Optional[subprocess.Popen]:
             unshare_bin = shutil.which('unshare')
+
             virtiofsd_bin = shutil.which('virtiofsd', path="/usr/lib:/usr/libexec")
             if virtiofsd_bin is None or unshare_bin is None:
                 logger.warning("virtiofsd or unshare command not found; volume '%s' will not be available", shared_dir)
@@ -407,6 +409,7 @@ class QemuRunner(QEMUMachine):
             if read_only:
                 cmd.append('--readonly')
             try:
+                logger.info("running virtiofsd %s" % (" ".join(shlex.quote(p) for p in cmd), ))
                 proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 return proc
             except Exception as e:
