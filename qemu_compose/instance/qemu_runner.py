@@ -277,21 +277,29 @@ class QemuRunner(QEMUMachine):
 
     def setup_qemu_args(self):
         # the very default args
+
+        vm_mem_size = "1G"
+
         default_args = {
             'cpu': 'max',
             'machine': 'type=q35,hpet=off',
             'accel': 'kvm',
-            'm': '1G',
+            'm': vm_mem_size,
             'smp': str(os.cpu_count()),
         }
 
         # image provided args override our defaults
         if self.image_manifest is not None and self.image_manifest.qemu_args:
-            for a in self.image_manifest.qemu_args:
+            for i, a in enumerate(self.image_manifest.qemu_args):
                 if not a.startswith('-'):
                     continue
                 if a[1:] in default_args:
                     default_args.pop(a[1:], None)
+
+                    if a[1:] == "m":
+                        if i + 1 < len(self.image_manifest.qemu_args):
+                            vm_mem_size = self.image_manifest.qemu_args[i + 1]
+
 
         # user provided args override image defaults
         for block in self.config.qemu_args:
@@ -299,6 +307,9 @@ class QemuRunner(QEMUMachine):
                 val = extract_format_or_default(block, key, self.env)
                 if key in default_args and isinstance(val, str):
                     default_args[key] = val
+
+                    if key == "m":
+                        vm_mem_size = val
 
         args = []
 
@@ -411,17 +422,35 @@ class QemuRunner(QEMUMachine):
             try:
                 logger.info("running virtiofsd %s" % (" ".join(shlex.quote(p) for p in cmd), ))
                 proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                # proc = subprocess.Popen(["/usr/bin/tail", "-f", "/dev/null"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 return proc
             except Exception as e:
                 logger.warning("failed to start virtiofsd for %s: %s", shared_dir, e)
                 return None
 
-        def wait_for_socket(path: str, timeout_sec: float = 3.0, interval_sec: float = 0.05) -> bool:
+        def drain_proc_output(proc: subprocess.Popen):
+            for s in (proc.stdout, proc.stderr):
+                if s is None:
+                    continue
+                if not s.readable():
+                    continue
+
+                os.set_blocking(s.fileno(), False)
+                try:
+                    line:bytes = s.read(1024)
+                    if line:
+                        logger.debug("virtiofsd: %s", line.decode('utf-8', errors='replace').rstrip())
+                except Exception:
+                    pass
+
+        def wait_for_socket(proc: subprocess.Popen, path: str, timeout_sec: float = 3.0, interval_sec: float = 0.05) -> bool:
             deadline = time.time() + timeout_sec
+            drain_proc_output(proc)
             while time.time() < deadline:
                 if os.path.exists(path):
                     return True
                 time.sleep(interval_sec)
+                drain_proc_output(proc)
             return os.path.exists(path)
 
         if self.config.network is None or self.config.network.lower() == 'user':
@@ -465,7 +494,7 @@ class QemuRunner(QEMUMachine):
                 continue
 
             # Wait for server socket to exist before wiring chardev, to avoid QEMU connect errors
-            if not wait_for_socket(socket_path):
+            if not wait_for_socket(child, socket_path, 300):
                 logger.warning("virtiofsd socket not ready, skipping mount %s -> %s", src, dst)
                 # Terminate child since we won't use it
                 try:
@@ -476,13 +505,23 @@ class QemuRunner(QEMUMachine):
 
             self.virtiofs_children.append(child)
             args.append('-chardev')
-            args.append(f"socket,id=char{i},path={socket_path}")
+            args.append(f"socket,id=qcfs-char{i},path={socket_path}")
             args.append('-device')
-            args.append(f"vhost-user-fs-pci,chardev=char{i},tag={tag}")
+            args.append(f"vhost-user-fs-pci,chardev=qcfs-char{i},tag={tag}")
             ro_suffix = ',ro' if ro else ''
             fstab_entries.append(f"{tag} {dst} virtiofs defaults{ro_suffix} 0 0")
 
         if fstab_entries:
+            # Force use of memory sharing with virtiofsd
+            # see https://github.com/virtio-win/kvm-guest-drivers-windows/wiki/Virtiofs:-Shared-file-system
+
+            args.extend([
+                "-object",
+                "memory-backend-file,id=qc-mem,size=%s,mem-path=/dev/shm,share=on" % vm_mem_size,
+                "-numa",
+                "node,memdev=qc-mem",
+            ])
+
             try:
                 fstab_str = "\n".join(fstab_entries)
                 fstab_b64 = base64.b64encode(fstab_str.encode('utf-8')).decode('ascii')
