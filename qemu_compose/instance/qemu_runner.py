@@ -7,6 +7,7 @@ import base64
 import fcntl
 import logging
 import subprocess
+import time
 
 from qemu_compose.qemu.machine import QEMUMachine
 from qemu_compose.local_store import LocalStore
@@ -373,29 +374,52 @@ class QemuRunner(QEMUMachine):
             return f"{sanitized}-{idx}"
 
         def start_virtiofsd(shared_dir: str, socket_path: str, read_only: bool) -> Optional[subprocess.Popen]:
-            virtiofsd = shutil.which('unshare')
-            if virtiofsd is None:
-                print("virtiofsd not found; volume '%s' will not be available", shared_dir, file=sys.stdout)
+            unshare_bin = shutil.which('unshare')
+            virtiofsd_bin = shutil.which('virtiofsd')
+            if virtiofsd_bin is None:
+                logger.warning("virtiofsd not found; volume '%s' will not be available", shared_dir)
                 return None
-            cmd = [
-                virtiofsd,
-                '--shared-dir', shared_dir,
-                '--socket-path', socket_path,
-                '--cache', 'never',
-                '--allow-direct-io',
-                '--allow-mmap',
-                '--thread-pool-size', '8',
-                '--sandbox', 'chroot',
-            ]
+            # Prefer running virtiofsd under unshare with userns mapping when available
+            if unshare_bin is not None:
+                cmd = [
+                    unshare_bin,
+                    '-r', '--map-auto', '--',
+                    virtiofsd_bin,
+                    '--shared-dir', shared_dir,
+                    '--socket-path', socket_path,
+                    '--cache', 'never',
+                    '--allow-direct-io',
+                    '--allow-mmap',
+                    '--thread-pool-size', '8',
+                    '--sandbox', 'chroot',
+                ]
+            else:
+                cmd = [
+                    virtiofsd_bin,
+                    '--shared-dir', shared_dir,
+                    '--socket-path', socket_path,
+                    '--cache', 'never',
+                    '--allow-direct-io',
+                    '--allow-mmap',
+                    '--thread-pool-size', '8',
+                    '--sandbox', 'chroot',
+                ]
             if read_only:
                 cmd.append('--readonly')
             try:
                 proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 return proc
             except Exception as e:
-                logger.exception('failed to start virtiofsd for %s' % shared_dir)
-                print("failed to start virtiofsd for %s: %s", shared_dir, e, file=sys.stderr)
+                logger.warning("failed to start virtiofsd for %s: %s", shared_dir, e)
                 return None
+
+        def wait_for_socket(path: str, timeout_sec: float = 3.0, interval_sec: float = 0.05) -> bool:
+            deadline = time.time() + timeout_sec
+            while time.time() < deadline:
+                if os.path.exists(path):
+                    return True
+                time.sleep(interval_sec)
+            return os.path.exists(path)
 
         if self.config.network is None or self.config.network.lower() == 'user':
             # add user network
@@ -435,6 +459,16 @@ class QemuRunner(QEMUMachine):
             socket_path = os.path.join(self.instance_dir, f"virtiofs-{tag}.sock")
             child = start_virtiofsd(src, socket_path, ro)
             if child is None:
+                continue
+
+            # Wait for server socket to exist before wiring chardev, to avoid QEMU connect errors
+            if not wait_for_socket(socket_path):
+                logger.warning("virtiofsd socket not ready, skipping mount %s -> %s", src, dst)
+                # Terminate child since we won't use it
+                try:
+                    child.terminate()
+                except Exception:
+                    pass
                 continue
 
             self.virtiofs_children.append(child)
