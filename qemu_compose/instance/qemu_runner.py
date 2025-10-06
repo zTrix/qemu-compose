@@ -373,9 +373,9 @@ class QemuRunner(QEMUMachine):
             return f"{sanitized}-{idx}"
 
         def start_virtiofsd(shared_dir: str, socket_path: str, read_only: bool) -> Optional[subprocess.Popen]:
-            virtiofsd = shutil.which('virtiofsd')
+            virtiofsd = shutil.which('unshare')
             if virtiofsd is None:
-                logger.warning("virtiofsd not found; volume '%s' will not be available", shared_dir)
+                print("virtiofsd not found; volume '%s' will not be available", shared_dir, file=sys.stdout)
                 return None
             cmd = [
                 virtiofsd,
@@ -393,7 +393,8 @@ class QemuRunner(QEMUMachine):
                 proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 return proc
             except Exception as e:
-                logger.warning("failed to start virtiofsd for %s: %s", shared_dir, e)
+                logger.exception('failed to start virtiofsd for %s' % shared_dir)
+                print("failed to start virtiofsd for %s: %s", shared_dir, e, file=sys.stderr)
                 return None
 
         if self.config.network is None or self.config.network.lower() == 'user':
@@ -433,8 +434,10 @@ class QemuRunner(QEMUMachine):
             tag = volume_tag_for(dst, i)
             socket_path = os.path.join(self.instance_dir, f"virtiofs-{tag}.sock")
             child = start_virtiofsd(src, socket_path, ro)
-            if child is not None:
-                self.virtiofs_children.append(child)
+            if child is None:
+                continue
+
+            self.virtiofs_children.append(child)
             args.append('-chardev')
             args.append(f"socket,id=char{i},path={socket_path}")
             args.append('-device')

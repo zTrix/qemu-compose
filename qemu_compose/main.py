@@ -90,7 +90,7 @@ def cli():
     # Parse only known top-level args, leave subcommand options for later
     args, rest = parser.parse_known_args()
 
-    if args.command == "version" or args.version:
+    if args.command == "version" or (args.version and not args.command):
         version(short=args.short)
         sys.exit(0)
 
