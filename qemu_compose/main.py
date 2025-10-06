@@ -90,7 +90,7 @@ def cli():
     # Parse only known top-level args, leave subcommand options for later
     args, rest = parser.parse_known_args()
 
-    if args.command == "version" or args.version:
+    if args.command == "version" or (args.version and not args.command):
         version(short=args.short)
         sys.exit(0)
 
@@ -262,6 +262,13 @@ def cli():
             help="Publish a port, format: host_ip:host_port:vm_port[/proto] or host_port:vm_port[/proto]; repeatable",
         )
         run_parser.add_argument(
+            "-v", "--volume",
+            dest="volumes",
+            action="append",
+            default=[],
+            help="Bind-mount a host directory into the guest using virtiofs; format: src:dst[:ro]; repeatable",
+        )
+        run_parser.add_argument(
             "image",
             type=str,
             help="Image identifier",
@@ -269,7 +276,7 @@ def cli():
         run_args = run_parser.parse_args(rest)
 
         from .cmd.run_command import command_run
-        sys.exit(command_run(image_hint=run_args.image, name=run_args.name, publish=run_args.publish))
+        sys.exit(command_run(image_hint=run_args.image, name=run_args.name, publish=run_args.publish, volumes=run_args.volumes))
     else:
         parser.print_help()
         sys.exit(1)

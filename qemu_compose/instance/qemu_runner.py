@@ -5,8 +5,10 @@ import os
 import sys
 import base64
 import fcntl
+import shlex
 import logging
 import subprocess
+import time
 
 from qemu_compose.qemu.machine import QEMUMachine
 from qemu_compose.local_store import LocalStore
@@ -87,6 +89,7 @@ class QemuConfig:
     env: Dict[str, str] = field(default_factory=dict)
     qemu_args: List[Dict[str, str]] = field(default_factory=list)
     ports: List[str] = field(default_factory=list)
+    volumes: List[str] = field(default_factory=list)
     boot_commands: List[Dict[str, Any]] = field(default_factory=list)
     before_script: List[str] = field(default_factory=list)
     after_script: List[str] = field(default_factory=list)
@@ -102,6 +105,7 @@ class QemuConfig:
             env=d.get("env", []),
             qemu_args=d.get("qemu_args", []),
             ports=d.get("ports", []),
+            volumes=d.get("volumes", []),
             boot_commands=d.get("boot_commands", []),
             before_script=d.get("before_script", []),
             after_script=d.get("after_script", []),
@@ -122,6 +126,7 @@ class QemuRunner(QEMUMachine):
         self.log_file = None
         self.image_manifest: Optional[ImageManifest] = None
         self.storage_overlays: List[Tuple[str, DiskSpec]] = []
+        self.virtiofs_children: List[subprocess.Popen] = []
 
         if config.binary:
             binary = config.binary
@@ -272,21 +277,29 @@ class QemuRunner(QEMUMachine):
 
     def setup_qemu_args(self):
         # the very default args
+
+        vm_mem_size = "1G"
+
         default_args = {
             'cpu': 'max',
             'machine': 'type=q35,hpet=off',
             'accel': 'kvm',
-            'm': '1G',
+            'm': vm_mem_size,
             'smp': str(os.cpu_count()),
         }
 
         # image provided args override our defaults
         if self.image_manifest is not None and self.image_manifest.qemu_args:
-            for a in self.image_manifest.qemu_args:
+            for i, a in enumerate(self.image_manifest.qemu_args):
                 if not a.startswith('-'):
                     continue
                 if a[1:] in default_args:
                     default_args.pop(a[1:], None)
+
+                    if a[1:] == "m":
+                        if i + 1 < len(self.image_manifest.qemu_args):
+                            vm_mem_size = self.image_manifest.qemu_args[i + 1]
+
 
         # user provided args override image defaults
         for block in self.config.qemu_args:
@@ -294,6 +307,9 @@ class QemuRunner(QEMUMachine):
                 val = extract_format_or_default(block, key, self.env)
                 if key in default_args and isinstance(val, str):
                     default_args[key] = val
+
+                    if key == "m":
+                        vm_mem_size = val
 
         args = []
 
@@ -348,6 +364,95 @@ class QemuRunner(QEMUMachine):
                 )
             )
 
+        # Bind-mount style volumes implemented via virtio-fs. Spec format:
+        #   src:dst[:ro]
+        # Examples:
+        #   /host/path:/mnt/data
+        #   /host/path:/mnt/readonly:ro
+        def parse_volume_spec(spec: str) -> Optional[Tuple[str, str, bool]]:
+            parts = [p.strip() for p in spec.split(':')]
+            if len(parts) < 2:
+                return None
+            src = parts[0]
+            dst = parts[1]
+            ro = any(p.lower() == 'ro' for p in parts[2:]) if len(parts) > 2 else False
+            if not src or not dst:
+                return None
+            return src, dst, ro
+
+        def volume_tag_for(dst: str, idx: int) -> str:
+            base = os.path.basename(dst) or f"vol{idx}"
+            sanitized = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in base)
+            return f"{sanitized}-{idx}"
+
+        def start_virtiofsd(shared_dir: str, socket_path: str, read_only: bool) -> Optional[subprocess.Popen]:
+            unshare_bin = shutil.which('unshare')
+
+            virtiofsd_bin = shutil.which('virtiofsd', path="/usr/lib:/usr/libexec")
+            if virtiofsd_bin is None or unshare_bin is None:
+                logger.warning("virtiofsd or unshare command not found; volume '%s' will not be available", shared_dir)
+                return None
+            # Prefer running virtiofsd under unshare with userns mapping when available
+            if unshare_bin is not None:
+                cmd = [
+                    unshare_bin,
+                    '-r', '--map-auto', '--',
+                    virtiofsd_bin,
+                    '--shared-dir', shared_dir,
+                    '--socket-path', socket_path,
+                    '--cache', 'never',
+                    '--allow-direct-io',
+                    '--allow-mmap',
+                    '--thread-pool-size', '8',
+                    '--sandbox', 'chroot',
+                ]
+            else:
+                cmd = [
+                    virtiofsd_bin,
+                    '--shared-dir', shared_dir,
+                    '--socket-path', socket_path,
+                    '--cache', 'never',
+                    '--allow-direct-io',
+                    '--allow-mmap',
+                    '--thread-pool-size', '8',
+                    '--sandbox', 'chroot',
+                ]
+            if read_only:
+                cmd.append('--readonly')
+            try:
+                logger.info("running virtiofsd %s" % (" ".join(shlex.quote(p) for p in cmd), ))
+                proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                # proc = subprocess.Popen(["/usr/bin/tail", "-f", "/dev/null"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                return proc
+            except Exception as e:
+                logger.warning("failed to start virtiofsd for %s: %s", shared_dir, e)
+                return None
+
+        def drain_proc_output(proc: subprocess.Popen):
+            for s in (proc.stdout, proc.stderr):
+                if s is None:
+                    continue
+                if not s.readable():
+                    continue
+
+                os.set_blocking(s.fileno(), False)
+                try:
+                    line:bytes = s.read(1024)
+                    if line:
+                        logger.debug("virtiofsd: %s", line.decode('utf-8', errors='replace').rstrip())
+                except Exception:
+                    pass
+
+        def wait_for_socket(proc: subprocess.Popen, path: str, timeout_sec: float = 3.0, interval_sec: float = 0.05) -> bool:
+            deadline = time.time() + timeout_sec
+            drain_proc_output(proc)
+            while time.time() < deadline:
+                if os.path.exists(path):
+                    return True
+                time.sleep(interval_sec)
+                drain_proc_output(proc)
+            return os.path.exists(path)
+
         if self.config.network is None or self.config.network.lower() == 'user':
             # add user network
             args.append('-netdev')
@@ -374,6 +479,56 @@ class QemuRunner(QEMUMachine):
             drive_param = drive_param_for(overlay_path, spec)
             args.append('-drive')
             args.append(drive_param)
+
+        # volumes via virtio-fs and fstab entries
+        fstab_entries: List[str] = []
+        for i, vol_spec in enumerate(self.config.volumes or []):
+            parsed = parse_volume_spec(vol_spec)
+            if not parsed:
+                continue
+            src, dst, ro = parsed
+            tag = volume_tag_for(dst, i)
+            socket_path = os.path.join(self.instance_dir, f"virtiofs-{tag}.sock")
+            child = start_virtiofsd(src, socket_path, ro)
+            if child is None:
+                continue
+
+            # Wait for server socket to exist before wiring chardev, to avoid QEMU connect errors
+            if not wait_for_socket(child, socket_path, 300):
+                logger.warning("virtiofsd socket not ready, skipping mount %s -> %s", src, dst)
+                # Terminate child since we won't use it
+                try:
+                    child.terminate()
+                except Exception:
+                    pass
+                continue
+
+            self.virtiofs_children.append(child)
+            args.append('-chardev')
+            args.append(f"socket,id=qcfs-char{i},path={socket_path}")
+            args.append('-device')
+            args.append(f"vhost-user-fs-pci,chardev=qcfs-char{i},tag={tag}")
+            ro_suffix = ',ro' if ro else ''
+            fstab_entries.append(f"{tag} {dst} virtiofs defaults{ro_suffix} 0 0")
+
+        if fstab_entries:
+            # Force use of memory sharing with virtiofsd
+            # see https://github.com/virtio-win/kvm-guest-drivers-windows/wiki/Virtiofs:-Shared-file-system
+
+            args.extend([
+                "-object",
+                "memory-backend-file,id=qc-mem,size=%s,mem-path=/dev/shm,share=on" % vm_mem_size,
+                "-numa",
+                "node,memdev=qc-mem",
+            ])
+
+            try:
+                fstab_str = "\n".join(fstab_entries)
+                fstab_b64 = base64.b64encode(fstab_str.encode('utf-8')).decode('ascii')
+                args.append('-smbios')
+                args.append(f'type=11,value=io.systemd.credential.binary:fstab.extra={fstab_b64}')
+            except Exception as e:
+                logger.warning("failed to encode fstab entries: %s", e)
 
         # image provided args append after defaults
         if self.image_manifest is not None and self.image_manifest.qemu_args:
@@ -431,3 +586,39 @@ class QemuRunner(QEMUMachine):
                 os.close(self.lock_fd)
         except Exception as e:
             logger.warning("failed to unlock instance dir: %s", e)
+
+        # Ensure virtiofsd processes are cleaned up
+        try:
+            children = getattr(self, 'virtiofs_children', None)
+            if children:
+                # Ask nicely first
+                for p in children:
+                    try:
+                        if p and p.poll() is None:
+                            p.terminate()
+                    except Exception as e:
+                        logger.debug("terminate virtiofsd failed: %s", e)
+                # Wait briefly
+                for p in children:
+                    try:
+                        if p and p.poll() is None:
+                            p.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            p.kill()
+                        except Exception as e:
+                            logger.debug("kill virtiofsd failed: %s", e)
+                    except Exception as e:
+                        logger.debug("wait virtiofsd failed: %s", e)
+                # Close stdio pipes
+                for p in children:
+                    for stream_name in ("stdin", "stdout", "stderr"):
+                        try:
+                            s = getattr(p, stream_name, None)
+                            if s:
+                                s.close()
+                        except Exception:
+                            pass
+                self.virtiofs_children = []
+        except Exception as e:
+            logger.warning("failed to cleanup virtiofsd: %s", e)
