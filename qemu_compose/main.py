@@ -61,7 +61,7 @@ def guess_conf_path(p:str | None):
     return None
 
 def version(short=False):
-    version = "v0.8.0"
+    version = "v0.8.2"
     if short:
         print(version, file=sys.stderr)
     else:
