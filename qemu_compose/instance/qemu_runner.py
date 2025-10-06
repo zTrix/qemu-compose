@@ -87,6 +87,7 @@ class QemuConfig:
     env: Dict[str, str] = field(default_factory=dict)
     qemu_args: List[Dict[str, str]] = field(default_factory=list)
     ports: List[str] = field(default_factory=list)
+    volumes: List[str] = field(default_factory=list)
     boot_commands: List[Dict[str, Any]] = field(default_factory=list)
     before_script: List[str] = field(default_factory=list)
     after_script: List[str] = field(default_factory=list)
@@ -102,6 +103,7 @@ class QemuConfig:
             env=d.get("env", []),
             qemu_args=d.get("qemu_args", []),
             ports=d.get("ports", []),
+            volumes=d.get("volumes", []),
             boot_commands=d.get("boot_commands", []),
             before_script=d.get("before_script", []),
             after_script=d.get("after_script", []),
@@ -122,6 +124,7 @@ class QemuRunner(QEMUMachine):
         self.log_file = None
         self.image_manifest: Optional[ImageManifest] = None
         self.storage_overlays: List[Tuple[str, DiskSpec]] = []
+        self.virtiofs_children: List[subprocess.Popen] = []
 
         if config.binary:
             binary = config.binary
@@ -348,6 +351,51 @@ class QemuRunner(QEMUMachine):
                 )
             )
 
+        # Bind-mount style volumes implemented via virtio-fs. Spec format:
+        #   src:dst[:ro]
+        # Examples:
+        #   /host/path:/mnt/data
+        #   /host/path:/mnt/readonly:ro
+        def parse_volume_spec(spec: str) -> Optional[Tuple[str, str, bool]]:
+            parts = [p.strip() for p in spec.split(':')]
+            if len(parts) < 2:
+                return None
+            src = parts[0]
+            dst = parts[1]
+            ro = any(p.lower() == 'ro' for p in parts[2:]) if len(parts) > 2 else False
+            if not src or not dst:
+                return None
+            return src, dst, ro
+
+        def volume_tag_for(dst: str, idx: int) -> str:
+            base = os.path.basename(dst) or f"vol{idx}"
+            sanitized = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in base)
+            return f"{sanitized}-{idx}"
+
+        def start_virtiofsd(shared_dir: str, socket_path: str, read_only: bool) -> Optional[subprocess.Popen]:
+            virtiofsd = shutil.which('virtiofsd')
+            if virtiofsd is None:
+                logger.warning("virtiofsd not found; volume '%s' will not be available", shared_dir)
+                return None
+            cmd = [
+                virtiofsd,
+                '--shared-dir', shared_dir,
+                '--socket-path', socket_path,
+                '--cache', 'never',
+                '--allow-direct-io',
+                '--allow-mmap',
+                '--thread-pool-size', '8',
+                '--sandbox', 'chroot',
+            ]
+            if read_only:
+                cmd.append('--readonly')
+            try:
+                proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                return proc
+            except Exception as e:
+                logger.warning("failed to start virtiofsd for %s: %s", shared_dir, e)
+                return None
+
         if self.config.network is None or self.config.network.lower() == 'user':
             # add user network
             args.append('-netdev')
@@ -374,6 +422,34 @@ class QemuRunner(QEMUMachine):
             drive_param = drive_param_for(overlay_path, spec)
             args.append('-drive')
             args.append(drive_param)
+
+        # volumes via virtio-fs and fstab entries
+        fstab_entries: List[str] = []
+        for i, vol_spec in enumerate(self.config.volumes or []):
+            parsed = parse_volume_spec(vol_spec)
+            if not parsed:
+                continue
+            src, dst, ro = parsed
+            tag = volume_tag_for(dst, i)
+            socket_path = os.path.join(self.instance_dir, f"virtiofs-{tag}.sock")
+            child = start_virtiofsd(src, socket_path, ro)
+            if child is not None:
+                self.virtiofs_children.append(child)
+            args.append('-chardev')
+            args.append(f"socket,id=char{i},path={socket_path}")
+            args.append('-device')
+            args.append(f"vhost-user-fs-pci,chardev=char{i},tag={tag}")
+            ro_suffix = ',ro' if ro else ''
+            fstab_entries.append(f"{tag} {dst} virtiofs defaults{ro_suffix} 0 0")
+
+        if fstab_entries:
+            try:
+                fstab_str = "\n".join(fstab_entries)
+                fstab_b64 = base64.b64encode(fstab_str.encode('utf-8')).decode('ascii')
+                args.append('-smbios')
+                args.append(f'type=11,value=io.systemd.credential.binary:fstab.extra={fstab_b64}')
+            except Exception as e:
+                logger.warning("failed to encode fstab entries: %s", e)
 
         # image provided args append after defaults
         if self.image_manifest is not None and self.image_manifest.qemu_args:
