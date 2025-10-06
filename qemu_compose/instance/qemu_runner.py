@@ -318,17 +318,27 @@ class QemuRunner(QEMUMachine):
             args.append('-smbios')
             args.append('type=11,value=io.systemd.credential:system.hostname=' + hostname)
 
-        def parse_port_spec(spec: str) -> Optional[Tuple[str, str, str]]:
-            parts = [p.strip() for p in spec.split(':')]
+        def parse_port_spec(spec: str) -> Optional[Tuple[str, str, str, str]]:
+            # Support forms:
+            #  - host_ip:host_port:vm_port
+            #  - host_port:vm_port
+            # Each of the above may be suffixed with "/tcp" or "/udp"
+            proto = 'tcp'
+            body, sep, suffix = spec.partition('/')
+            if sep:
+                proto = suffix.strip().lower() or 'tcp'
+                if proto not in ('tcp', 'udp'):
+                    proto = 'tcp'
+            parts = [p.strip() for p in body.split(':')]
             if len(parts) == 3:
-                return parts[0], parts[1], parts[2]
+                return proto, parts[0], parts[1], parts[2]
             if len(parts) == 2:
-                return '', parts[0], parts[1]
+                return proto, '', parts[0], parts[1]
             return None
 
-        def format_hostfwd(triplet: Tuple[str, str, str]) -> str:
-            host_ip, host_port, vm_port = triplet
-            return f",hostfwd=:{host_ip}:{host_port}-:{vm_port}"
+        def format_hostfwd(item: Tuple[str, str, str, str]) -> str:
+            proto, host_ip, host_port, vm_port = item
+            return f",hostfwd={proto}:{host_ip}:{host_port}-:{vm_port}"
 
         def hostfwd_segments(ports: List[str]) -> str:
             return ''.join(
