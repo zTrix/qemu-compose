@@ -507,3 +507,39 @@ class QemuRunner(QEMUMachine):
                 os.close(self.lock_fd)
         except Exception as e:
             logger.warning("failed to unlock instance dir: %s", e)
+
+        # Ensure virtiofsd processes are cleaned up
+        try:
+            children = getattr(self, 'virtiofs_children', None)
+            if children:
+                # Ask nicely first
+                for p in children:
+                    try:
+                        if p and p.poll() is None:
+                            p.terminate()
+                    except Exception as e:
+                        logger.debug("terminate virtiofsd failed: %s", e)
+                # Wait briefly
+                for p in children:
+                    try:
+                        if p and p.poll() is None:
+                            p.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            p.kill()
+                        except Exception as e:
+                            logger.debug("kill virtiofsd failed: %s", e)
+                    except Exception as e:
+                        logger.debug("wait virtiofsd failed: %s", e)
+                # Close stdio pipes
+                for p in children:
+                    for stream_name in ("stdin", "stdout", "stderr"):
+                        try:
+                            s = getattr(p, stream_name, None)
+                            if s:
+                                s.close()
+                        except Exception:
+                            pass
+                self.virtiofs_children = []
+        except Exception as e:
+            logger.warning("failed to cleanup virtiofsd: %s", e)
