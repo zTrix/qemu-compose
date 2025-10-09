@@ -165,7 +165,9 @@ def execute_docker_style_command(command: str, env: dict):
         
         hash_type = parts[1].lower()
         filename = extract_format_or_default(None, parts[2], env)
-        expected_hash = parts[3]
+        expected_hash = extract_format_or_default(None, parts[3], env)
+        if expected_hash is not None:
+            expected_hash = str(expected_hash).lower()
         
         if not os.path.exists(filename):
             logger.error(f"File not found: {filename}")
@@ -174,7 +176,7 @@ def execute_docker_style_command(command: str, env: dict):
         logger.info(f"Verifying {filename} with {hash_type}")
         try:
             with open(filename, 'rb') as f:
-                file_hash = hashlib.new(hash_type, f.read()).hexdigest()
+                file_hash = hashlib.new(hash_type, f.read()).hexdigest().lower()
             
             if file_hash == expected_hash:
                 logger.info(f"Hash verification passed: {file_hash}")
