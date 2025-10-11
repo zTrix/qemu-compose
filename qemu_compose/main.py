@@ -9,6 +9,8 @@ import shutil
 import threading
 import tty
 import subprocess
+import urllib.request
+import shlex
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
