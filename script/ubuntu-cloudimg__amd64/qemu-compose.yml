@@ -21,7 +21,7 @@ http_serve:
   access_ip: '{GATEWAY_IP}'
   port: '{http_port}'
   root: '{CWD}/http'
-args:
+qemu_args:
   - # basic
     smp: '2'
     m: 4G

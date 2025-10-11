@@ -9,205 +9,143 @@ import shutil
 import threading
 import tty
 import subprocess
-import hashlib
-import urllib.request
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 from .qemu.machine import QEMUMachine
 from .qemu.machine.machine import AbnormalShutdown
-from .jsonlisp import default_env, interp
+from .local_store import LocalStore
+from .instance.qemu_runner import QemuConfig, QemuRunner
 
-from .zio import zio, write_debug, select_ignoring_useless_signal, ttyraw
 
 logger = logging.getLogger("qemu-compose")
 
-class HttpServer:
-    def __init__(self, listen:str, port:int, root:str):
-        self.listen = listen
-        self.port = port
-        self.root = root
+def _is_dockerfile_command(cmd: str) -> bool:
+    cmd = cmd.strip().upper()
+    return cmd.startswith(('DOWNLOAD ', 'COPY ', 'RUN ', 'ENV ', 'WORKDIR ', 'VERIFY ', 'SHELL '))
 
-    def start(self):
-        http_handler = partial(SimpleHTTPRequestHandler, directory=self.root)
-        server = ThreadingHTTPServer((self.listen, self.port), http_handler)
-        server_thread = threading.Thread(target=server.serve_forever)
-        server_thread.daemon = True
-        server_thread.start()
-
-class StreamWrapper:
-    def __init__(self, obj):
-        self.obj = obj
-
-    def __getattr__(self, name):
-        return getattr(self.obj, name)
-
-    def write(self, s):
-        if isinstance(s, str):
-            s = s.encode()
-        self.obj.write(s)
-
-class Terminal(object):
-    def __init__(self, fd, log_path=None):
-        self.fd = fd
-
-        if isinstance(log_path, str):
-            self.debug_file = open(log_path, "wb") if log_path else None
-        else:
-            self.debug_file = log_path
-
-        self.io = zio(fd, print_write=False, logfile=sys.stdout, debug=self.debug_file, timeout=3600)
-
-        self.term_feed_running = False
-        self.term_feed_drain_thread = None
-
-        if not os.isatty(0):
-            raise Exception('qemu-compose.Terminal must run in a UNIX 98 style pty/tty')
-
-    def term_feed_loop(self):
-        logger.info('Terminal.term_feed_loop started...')
-        while self.term_feed_running:
-            r, _, _ = select_ignoring_useless_signal([0], [], [], 0.2)
-
-            if 0 in r:
-                data = os.read(0, 1024)
-                if data:
-                    logger.info('Terminal.term_feed_loop received(%d) -> %s' % (len(data), data))
-                    self.io.write(data)
-
-        logger.info('Terminal.term_feed_loop finished.')
-
-    def run_batch(self, cmds:List, env_variables=None):
-        if not isinstance(cmds, list):
-            raise ValueError("cmds must be a list")
-        
-        current_tty_mode = tty.tcgetattr(0)[:]
-        ttyraw(0)
-
-        try:
-            self.term_feed_running = True
-            self.term_feed_drain_thread = threading.Thread(target=self.term_feed_loop)
-            self.term_feed_drain_thread.daemon = True
-            self.term_feed_drain_thread.start()
-            
-            io = self.io
-
-            if self.debug_file:
-                write_debug(self.debug_file, b'run_batch: cmds = %r' % cmds)
-
-            transpiled_cmds = ['begin'] + cmds
-
-            env = default_env()
-
-            env['read_until'] = io.read_until
-            env['write'] = io.write
-            env['writeline'] = io.writeline
-            env['wait'] = io.read_until_timeout
-            env['RegExp'] = lambda x: re.compile(x.encode())
-            env['interact'] = self.interact
-
-            if env_variables:
-                env.update(env_variables)
-
-            interp(transpiled_cmds, env)
-
-        finally:
-            tty.tcsetattr(0, tty.TCSAFLUSH, current_tty_mode)
-
-    def interact(self, buffered:Optional[bytes]=None, raw_mode=False):
-
-        self.term_feed_running = False
-        if self.term_feed_drain_thread is not None:
-            self.term_feed_drain_thread.join()
-
-        self.io.interactive(raw_mode=raw_mode, buffered=buffered)
-
-def extract_format_or_default(mapping:dict, key:str, env:dict, default=None):
-    value = mapping.get(key) if mapping else key
-    if value:
-        # FIXME: format has security issues
-        return str(value).format(**env)
-    return default
-
-def execute_docker_style_command(command: str, env: dict):
-    parts = command.strip().split()
-    if not parts:
-        return
+def _execute_dockerfile_command(cmd: str, env: dict) -> str:
+    import hashlib
     
-    cmd_type = parts[0].upper()
+    cmd = cmd.strip()
+    command_parts = cmd.split(None, 1) 
+    if len(command_parts) < 2:
+        return cmd  
     
-    if cmd_type == 'DOWNLOAD':
-        if len(parts) < 3:
-            logger.error(f"DOWNLOAD command requires at least URL and filename: {command}")
-            return
-        
-        url = extract_format_or_default(None, parts[1], env)
-        filename = extract_format_or_default(None, parts[2], env)
-        expected_size = extract_format_or_default(None, parts[3], env) if len(parts) > 3 else None
-        
-        logger.info(f"Downloading {url} to {filename}")
-        try:
-            urllib.request.urlretrieve(url, filename)
-            actual_size = os.path.getsize(filename)
-            logger.info(f"Downloaded {filename}, size: {actual_size}")
-            
-            if expected_size and str(actual_size) != expected_size:
-                logger.warning(f"Size mismatch: expected {expected_size}, got {actual_size}")
+    command_name = command_parts[0].upper()
+    args = command_parts[1]
+    
+    try:
+        if command_name == 'DOWNLOAD':
+            # DOWNLOAD url filename [expected_size]
+            parts = args.split()
+            if len(parts) >= 2:
+                url = parts[0].format(**env)
+                filename = parts[1].format(**env)
+                expected_size = int(parts[2]) if len(parts) > 2 else None
                 
-        except Exception as e:
-            logger.error(f"Download failed: {e}")
-            raise
-    
-    elif cmd_type == 'VERIFY':
-        if len(parts) < 4:
-            logger.error(f"VERIFY command requires hash_type, filename, and expected_hash: {command}")
-            return
-        
-        hash_type = parts[1].lower()
-        filename = extract_format_or_default(None, parts[2], env)
-        expected_hash = extract_format_or_default(None, parts[3], env)
-        if expected_hash is not None:
-            expected_hash = str(expected_hash).lower()
-        
-        if not os.path.exists(filename):
-            logger.error(f"File not found: {filename}")
-            raise FileNotFoundError(f"File not found: {filename}")
-        
-        logger.info(f"Verifying {filename} with {hash_type}")
-        try:
-            with open(filename, 'rb') as f:
-                file_hash = hashlib.new(hash_type, f.read()).hexdigest().lower()
-            
-            if file_hash == expected_hash:
-                logger.info(f"Hash verification passed: {file_hash}")
-            else:
-                logger.error(f"Hash verification failed: expected {expected_hash}, got {file_hash}")
-                raise ValueError(f"Hash verification failed: expected {expected_hash}, got {file_hash}")
+                print(f"Downloading {url} to {filename}...")
+                urllib.request.urlretrieve(url, filename)
                 
-        except Exception as e:
-            logger.error(f"Verification failed: {e}")
-            raise
-    
-    elif cmd_type == 'SHELL':
-        if len(parts) < 2:
-            logger.error(f"SHELL command requires a shell command: {command}")
-            return
+                if expected_size:
+                    actual_size = os.path.getsize(filename)
+                    if actual_size != expected_size:
+                        print(f"Warning: Expected size {expected_size}, got {actual_size}")
+                    else:
+                        print(f"Download completed, size verified: {actual_size}")
+                else:
+                    actual_size = os.path.getsize(filename)
+                    print(f"Download completed, size: {actual_size}")
+                
+                return f"# Downloaded: {filename}"
         
-        shell_cmd = ' '.join(parts[1:])
-        shell_cmd = extract_format_or_default(None, shell_cmd, env)
+        elif command_name == 'COPY':
+            # COPY source dest
+            parts = args.split()
+            if len(parts) >= 2:
+                source = parts[0].format(**env)
+                dest = parts[1].format(**env)
+                print(f"Copying {source} to {dest}...")
+                if os.path.isdir(source):
+                    shutil.copytree(source, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(source, dest)
+                print(f"Copy completed: {source} -> {dest}")
+                return f"# Copied: {source} -> {dest}"
         
-        logger.info(f"Executing shell command: {shell_cmd}")
-        try:
-            subprocess.run(shell_cmd.strip(), shell=True, check=True)
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Shell command failed: {e}")
-            raise
+        elif command_name == 'RUN':
+            # RUN command
+            command = args.format(**env)
+            print(f"Running: {command}")
+            result = subprocess.run(command, shell=True, check=True, 
+                                  capture_output=True, text=True)
+            if result.stdout:
+                print(f"Output: {result.stdout}")
+            return f"# Executed: {command}"
+        
+        elif command_name == 'ENV':
+            # ENV key=value
+            if '=' in args:
+                key, value = args.split('=', 1)
+                key = key.strip()
+                value = value.format(**env).strip()
+                env[key] = value
+                os.environ[key] = value
+                print(f"Set environment variable: {key}={value}")
+                return f"# Set ENV: {key}={value}"
+        
+        elif command_name == 'WORKDIR':
+            # WORKDIR path
+            path = args.format(**env)
+            os.makedirs(path, exist_ok=True)
+            os.chdir(path)
+            print(f"Changed working directory to: {path}")
+            return f"# Changed to: {path}"
+        
+        elif command_name == 'VERIFY':
+            # VERIFY filename [expected_size] [expected_hash]
+            parts = args.split()
+            if len(parts) >= 1:
+                filename = parts[0].format(**env)
+                expected_size = int(parts[1]) if len(parts) > 1 else None
+                expected_hash = parts[2] if len(parts) > 2 else None
+                
+                if not os.path.exists(filename):
+                    raise FileNotFoundError(f"File not found: {filename}")
+                
+                actual_size = os.path.getsize(filename)
+                print(f"Verifying {filename}...")
+                
+                if expected_size and actual_size != expected_size:
+                    raise ValueError(f"Size mismatch: expected {expected_size}, got {actual_size}")
+                
+                if expected_hash:
+                    with open(filename, 'rb') as f:
+                        file_hash = hashlib.md5(f.read()).hexdigest()
+                    if file_hash != expected_hash:
+                        raise ValueError(f"Hash mismatch: expected {expected_hash}, got {file_hash}")
+                    print(f"Hash verified: {file_hash}")
+                
+                print(f"Verification passed, size: {actual_size}")
+                return f"# Verified: {filename}"
+        
+        elif command_name == 'SHELL':
+            # SHELL command
+            command = args.format(**env)
+            print(f"Shell: {command}")
+            result = subprocess.run(command, shell=True, check=True, 
+                                  capture_output=True, text=True)
+            if result.stdout:
+                print(f"Output: {result.stdout}")
+            if result.stderr:
+                print(f"Error: {result.stderr}")
+            return f"# Shell: {command}"
     
-    else:
-        command = extract_format_or_default(None, command, env)
-        if command:
-            logger.info(f"Executing command: {command}")
-            subprocess.run(command.strip(), shell=True, check=True)
+    except Exception as e:
+        print(f"Warning: Dockerfile command failed: {e}")
+        return cmd  
+    
+    return cmd 
 
 def execute_script_commands(script_lines, env):
     if not script_lines:
@@ -216,134 +154,61 @@ def execute_script_commands(script_lines, env):
     for line in script_lines:
         if not line.strip():
             continue
+  
+        if _is_dockerfile_command(line.strip()):
+            result = _execute_dockerfile_command(line, env)
+            if result.startswith('#'):
+                continue
         
-        if re.match(r'^[A-Z]+\s', line.strip()):
-            execute_docker_style_command(line, env)
-        else:
-            command = extract_format_or_default(None, line, env)
-            if command:
-                logger.info(f"Executing command: {command}")
+        if isinstance(line, list):
+            subprocess.run(line, check=True)
+        elif isinstance(line, str):
+            command = line.format(**env)
+            if command.strip():
+                print(f"Executing: {command}")
                 subprocess.run(command.strip(), shell=True, check=True)
 
 def run(config_path, log_path=None, env_update=None):
-
-    if log_path:
-        debug_file = open(log_path, "wb")
-        logging.basicConfig(level=logging.DEBUG, stream=StreamWrapper(debug_file))
-    else:
-        debug_file = None
-
-    config: dict
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
-
-    name = config.get('name')
-
-    binary = config.get('binary', shutil.which('qemu-system-x86_64'))
-    if not binary:
-        raise Exception('qemu binary not found')
-    
+    store = LocalStore()
     cwd = os.path.normpath(os.path.abspath(os.path.dirname(config_path)))
-    term_size = os.get_terminal_size()
 
-    env = {
-        'CWD': cwd,
-        'GATEWAY_IP': '10.0.2.2',   # qemu user network default gateway ip
-        'TERM_ROWS': term_size.lines,
-        'TERM_COLS': term_size.columns,
-    }
+    config_obj: dict
+    with open(config_path) as f:
+        config_obj = yaml.safe_load(f)
 
-    if config.get('env'):
-        for k in config.get('env'):
-            env[k] = config.get('env')[k]
+    config = QemuConfig.from_dict(config_obj)
+    vm = QemuRunner(config, store, cwd)
 
-    logger.info("change directory to %s" % env['CWD'])
-    os.chdir(env['CWD'])
+    if (exit_code := vm.check_and_lock()) > 0:
+        return exit_code
+
+    vm.prepare_env(env_update=env_update)
+
+    if (exit_code := vm.prepare_storage()) > 0:
+        return exit_code
+
+    if config_obj.get('before_script'):
+        execute_script_commands(config_obj.get('before_script'), vm.env)
     
-    http_port = None
-    if config.get('http_serve'):
-        http_serve_config:dict = config.get('http_serve')
-        http_listen = extract_format_or_default(http_serve_config, 'listen', env, default='0.0.0.0')
-        http_port = int(extract_format_or_default(http_serve_config, 'port', env, default=8888))
-        http_root = extract_format_or_default(http_serve_config, 'root', env, default=env['CWD'])
-
-        http_server = HttpServer(http_listen, http_port, http_root)
-        http_server.start()
-        logger.info('HTTP server started on %s:%d, serving %s' % (http_listen, http_port, http_root))
-
-    if http_port is not None:
-        env['HTTP_PORT'] = http_port
-        access_ip = extract_format_or_default(config.get('http_serve'), 'access_ip', env, default=env['GATEWAY_IP']) if config.get('http_serve') else env['GATEWAY_IP']
-        env['HTTP_HOST'] = access_ip
-
-    if env_update:
-        env.update(env_update)
-
-    if config.get('before_script'):
-        execute_script_commands(config.get('before_script'), env)
-
-    default_args = {
-        'cpu': 'max',
-        'machine': 'type=q35',
-        'accel': 'kvm',
-        'm': '1G',
-        'smp': '1',
-    }
-
-    for block in config.get('args'):
-        for key in block:
-            val = extract_format_or_default(block, key, env)
-            if key in default_args:
-                default_args[key] = val
-
-    args = []
-    for key in default_args:
-        args.append('-' + key)
-        args.append(default_args[key])
-
-    for block in config.get('args'):
-        for key in block:
-            val = extract_format_or_default(block, key, env)
-            if key in default_args:
-                continue
-            args.append('-' + key)
-            if val is not None:
-                args.append(val)
-
-    if name:
-        args.append('-name')
-        args.append(name)
-
-    vm = QEMUMachine(binary, args=args, name=name)
-    vm.add_monitor_null()
-    vm.set_qmp_monitor(True)
-    vm.set_console(console_chardev='socket', device_type='isa-serial')
+    vm.setup_qemu_args()
 
     try:
-        vm.launch()
-
-        term = Terminal(vm.console_file, debug_file)
-
-        boot_commands = config.get('boot_commands')
-        if boot_commands:
-            term.run_batch(boot_commands, env_variables=env)
-        else:
-            term.interact(raw_mode=True)
-
-        if config.get('after_script'):
-            execute_script_commands(config.get('after_script'), env)
-
+        vm.start()
+        vm.interact()
+        if config_obj.get('after_script'):
+            execute_script_commands(config_obj.get('after_script'), vm.env)
     except KeyboardInterrupt:
         logger.warning("Keyboard interrupt, shutting down vm...")
     finally:
         try:
-            if vm.is_running():
+            if vm is not None and vm.is_running():
                 vm.shutdown(hard=True)
         except AbnormalShutdown:
             logger.error('abnormal shutdown exception')
         finally:
-            vm._load_io_log()
-            logger.info('vm.process_io_log = %r' % (vm.get_log(), ))
+            if vm is not None:
+                vm.cleanup()
+    return 0
 
 def guess_conf_path(p: Optional[str]):
     if p:
@@ -354,7 +219,7 @@ def guess_conf_path(p: Optional[str]):
     return None
 
 def version(short=False):
-    version = "v0.6.0"
+    version = "v0.8.2"
     if short:
         print(version, file=sys.stderr)
     else:
@@ -368,23 +233,25 @@ def cli():
         usage="qemu-compose [OPTIONS] COMMAND",
         epilog="""Commands:
   up          Create and start QEMU vm
+  ssh         Run ssh with instance key
+  ps          List VM instances
   version     Show the qemu-compose version information
+  images      List VM images found in local store
+  run         Create and run a new VM from an image
 """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
     parser.add_argument("--short", action="store_true", default=False, help="Shows only qemu-compose's version number")
     parser.add_argument('command', type=str, nargs='?', help='command to run')
     parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
-    parser.add_argument("--log-path", type=str, help="detailed log path")
     parser.add_argument("--project-directory", type=str, help="Specify an alternate working directory (default: the path of the Compose file)")
-    args = parser.parse_args()
+    # Parse only known top-level args, leave subcommand options for later
+    args, rest = parser.parse_known_args()
 
-    if args.version:
+    if args.command == "version" or (args.version and not args.command):
         version(short=args.short)
         sys.exit(0)
-    if args.command == "version":
-        version(short=args.short)
-        sys.exit(0)
+
     if not args.command:
         parser.print_help()
         sys.exit(1)
@@ -397,4 +264,177 @@ def cli():
         if not conf_path:
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
-        run(conf_path, log_path=args.log_path, env_update=env_update)
+        sys.exit(run(conf_path, env_update=env_update))
+    elif args.command == "ssh":
+        # Functional helpers scoped to ssh subcommand for clarity.
+        def read_text(path: str) -> Optional[str]:
+            try:
+                with open(path, "r") as f:
+                    return f.read().strip()
+            except Exception:
+                return None
+
+        def build_name_index(root: str) -> dict[str, str]:
+            # Map VM name -> VMID for all instances having a name file.
+            def name_of(vmid: str) -> Optional[str]:
+                return read_text(os.path.join(root, vmid, "name"))
+
+            def collect() -> List[tuple[str, Optional[str]]]:
+                return [
+                    (d, name_of(d))
+                    for d in os.listdir(root)
+                    if os.path.isdir(os.path.join(root, d))
+                ]
+
+            return {name: vmid for (vmid, name) in collect() if name}
+
+        def list_vmids(root: str) -> List[str]:
+            return [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
+
+        def resolve_identifier_with_prefix(
+            ident: str,
+            ids: List[str],
+            name_index: dict[str, str],
+        ) -> tuple[Optional[str], List[str]]:
+            # Exact matches take precedence
+            if ident in ids:
+                return ident, [ident]
+            if ident in name_index:
+                return name_index[ident], [name_index[ident]]
+
+            id_matches = [i for i in ids if i.startswith(ident)]
+            candidates = id_matches
+
+            if len(candidates) == 1:
+                return candidates[0], candidates
+            return None, candidates
+
+        def build_ssh_cmd(root: str, vmid: str, passthrough: List[str]) -> tuple[List[str], Optional[str]]:
+            key_path = os.path.join(root, vmid, "ssh-key")
+            cid_path = os.path.join(root, vmid, "cid")
+            cid_val = read_text(cid_path)
+
+            base: List[str] = [
+                "ssh",
+                "-S", "none",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-i", key_path,
+            ]
+
+            destination = f"root@vsock%{cid_val}" if cid_val else "root@vsock%${cid}"
+            cmd = base + [destination] + passthrough
+            return cmd, cid_val
+
+        # Parse raw argv after the 'ssh' token to avoid mixing with argparse.
+        try:
+            argv_after_ssh = sys.argv[sys.argv.index("ssh") + 1:]
+        except ValueError:
+            argv_after_ssh = []
+
+        if not argv_after_ssh:
+            print("Usage:  qemu-compose ssh VMID|NAME [COMMAND [ARG...]]", file=sys.stderr)
+            sys.exit(1)
+
+        store = LocalStore()
+        instance_root = store.instance_root
+
+        name_index = build_name_index(instance_root)
+        ids = list_vmids(instance_root)
+        # Identifier must be the first token after 'ssh'. Supports unique prefix.
+        ident_token = argv_after_ssh[0]
+        vmid, candidates = resolve_identifier_with_prefix(ident_token, ids, name_index)
+
+        if vmid is None and not candidates:
+            print("Error: no VMID or NAME matches the given prefix, and it must appear immediately after 'ssh'.", file=sys.stderr)
+            print("Usage:  qemu-compose ssh VMID|NAME [COMMAND [ARG...]]", file=sys.stderr)
+            sys.exit(1)
+
+        if vmid is None and candidates:
+            preview = ", ".join(sorted(candidates)[:8])
+            more = "" if len(candidates) <= 8 else f" ... and {len(candidates)-8} more"
+            print(f"Error: identifier '{ident_token}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
+            sys.exit(1)
+
+        key_path = os.path.join(instance_root, vmid, "ssh-key")
+        if not os.path.exists(key_path):
+            print("Error: instance key not found: %s" % key_path, file=sys.stderr)
+            sys.exit(1)
+
+        # Only passthrough args after the identifier are supported.
+        passthrough = argv_after_ssh[1:]
+        ssh_cmd, cid_val = build_ssh_cmd(instance_root, vmid, passthrough)
+
+        if not cid_val:
+            printable = " ".join(shlex.quote(p) for p in ssh_cmd)
+            print(printable)
+            sys.exit(0)
+
+        try:
+            os.execvp(ssh_cmd[0], ssh_cmd)
+        except FileNotFoundError:
+            print("Error: 'ssh' binary not found in PATH", file=sys.stderr)
+            sys.exit(127)
+        except OSError as e:
+            print(f"Error executing ssh: {e}", file=sys.stderr)
+            sys.exit(1)
+    elif args.command == "ps":
+        import argparse as _argparse
+        # Sub-parser for `ps` options to keep scope minimal
+        ps_parser = _argparse.ArgumentParser(
+            prog="qemu-compose ps",
+            add_help=True,
+            description="List qemu-compose VM instances",
+        )
+        ps_parser.add_argument(
+            "-a", "--all",
+            action="store_true",
+            help="Show all the containers, default is only running vm instance",
+        )
+        # Parse only the args following the "ps" command
+        ps_args = ps_parser.parse_args(rest)
+
+        from .cmd.ps_command import command_ps
+
+        sys.exit(command_ps(show_all=ps_args.all))
+    elif args.command == "images":
+        from .cmd.images_command import command_images
+        sys.exit(command_images())
+    elif args.command == "run":
+        import argparse as _argparse
+        run_parser = _argparse.ArgumentParser(
+            prog="qemu-compose run",
+            add_help=True,
+            description="Create an instance overlay from an image and print QEMU command",
+        )
+        run_parser.add_argument(
+            "--name",
+            required=False,
+            help="Instance name; auto-generated if omitted",
+        )
+        run_parser.add_argument(
+            "-p", "--publish",
+            dest="publish",
+            action="append",
+            default=[],
+            help="Publish a port, format: host_ip:host_port:vm_port[/proto] or host_port:vm_port[/proto]; repeatable",
+        )
+        run_parser.add_argument(
+            "-v", "--volume",
+            dest="volumes",
+            action="append",
+            default=[],
+            help="Bind-mount a host directory into the guest using virtiofs; format: src:dst[:ro]; repeatable",
+        )
+        run_parser.add_argument(
+            "image",
+            type=str,
+            help="Image identifier",
+        )
+        run_args = run_parser.parse_args(rest)
+
+        from .cmd.run_command import command_run
+        sys.exit(command_run(image_hint=run_args.image, name=run_args.name, publish=run_args.publish, volumes=run_args.volumes))
+    else:
+        parser.print_help()
+        sys.exit(1)

@@ -1,0 +1,19 @@
+{
+  "id": "bc94e487ff9ea43c6a83c9d6a34dc1b5f7eaf1e335c4978c2bef76099c93dab1",
+  "architecture": "amd64",
+  "os": "linux",
+  "created": "2025-10-04T16:39:41.190005011Z",
+  "repo_tags": [
+    "devbox:archlinux-20251004.1"
+  ],
+  "disks": [
+    ["disk.qcow2", "qcow2", "if=virtio"]
+  ],
+  "qemu_args": [
+    "-bios", "/usr/share/ovmf/x64/OVMF.4m.fd",
+    "-kernel", "{IMAGE_DIR}/kernel",
+    "-append", "rw root=/dev/vda3 console=ttyS0"
+  ],
+  "digest": "sha256:bc94e487ff9ea43c6a83c9d6a34dc1b5f7eaf1e335c4978c2bef76099c93dab1",
+  "comment": "devbox built from archlinux"
+}
