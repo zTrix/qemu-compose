@@ -154,17 +154,22 @@ def execute_script_commands(script_lines, env):
         return
     
     for line in script_lines:
-        if not line.strip():
+        if isinstance(line, str) and not line.strip():
             continue
-  
-        if _is_dockerfile_command(line.strip()):
-            result = _execute_dockerfile_command(line, env)
-            if result.startswith('#'):
-                continue
+        if isinstance(line, list) and not line:
+            continue
         
         if isinstance(line, list):
+            print(f"Executing exec command: {line}")
             subprocess.run(line, check=True)
-        elif isinstance(line, str):
+            continue
+
+        if isinstance(line, str):
+            if _is_dockerfile_command(line.strip()):
+                result = _execute_dockerfile_command(line, env)
+                if result.startswith('#'):
+                    continue
+            
             command = line.format(**env)
             if command.strip():
                 print(f"Executing: {command}")
