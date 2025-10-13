@@ -388,12 +388,17 @@ class QemuRunner(QEMUMachine):
         def start_virtiofsd(shared_dir: str, socket_path: str, read_only: bool) -> Optional[subprocess.Popen]:
             unshare_bin = shutil.which('unshare')
 
-            virtiofsd_bin = shutil.which('virtiofsd', path="/usr/lib:/usr/libexec")
-            if virtiofsd_bin is None or unshare_bin is None:
-                logger.warning("virtiofsd or unshare command not found; volume '%s' will not be available", shared_dir)
+            if os.getuid() != 0 and unshare_bin is None:
+                print("unshare command not found; volume '%s' will not be available" % shared_dir, file=sys.stderr)
                 return None
+
+            virtiofsd_bin = shutil.which('virtiofsd', path="/usr/lib:/usr/libexec")
+            if virtiofsd_bin is None:
+                print("virtiofsd command not found; volume '%s' will not be available" % shared_dir, file=sys.stderr)
+                return None
+
             # Prefer running virtiofsd under unshare with userns mapping when available
-            if unshare_bin is not None:
+            if unshare_bin is not None and os.getuid() != 0:
                 cmd = [
                     unshare_bin,
                     '-r', '--map-auto', '--',
@@ -402,7 +407,6 @@ class QemuRunner(QEMUMachine):
                     '--socket-path', socket_path,
                     '--cache', 'never',
                     '--allow-direct-io',
-                    '--allow-mmap',
                     '--thread-pool-size', '8',
                     '--sandbox', 'chroot',
                 ]
@@ -413,10 +417,13 @@ class QemuRunner(QEMUMachine):
                     '--socket-path', socket_path,
                     '--cache', 'never',
                     '--allow-direct-io',
-                    '--allow-mmap',
                     '--thread-pool-size', '8',
                     '--sandbox', 'chroot',
                 ]
+
+            if b'--allow-mmap' in subprocess.check_output([virtiofsd_bin, '-h']):
+                cmd.append('--allow-mmap')
+                
             if read_only:
                 cmd.append('--readonly')
             try:
