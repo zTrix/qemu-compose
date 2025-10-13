@@ -2,7 +2,10 @@ from typing import List
 import os
 import uuid
 
-from Crypto.PublicKey import ECC
+try:
+    from Crypto.PublicKey import ECC
+except:
+    from Cryptodome.PublicKey import ECC
 
 def new_random_vmid(instance_root:str) -> str:
     return uuid.uuid4().bytes.hex()
