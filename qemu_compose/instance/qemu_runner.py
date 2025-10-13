@@ -494,7 +494,7 @@ class QemuRunner(QEMUMachine):
                 continue
 
             # Wait for server socket to exist before wiring chardev, to avoid QEMU connect errors
-            if not wait_for_socket(child, socket_path, 300):
+            if not wait_for_socket(child, socket_path, 30):
                 logger.warning("virtiofsd socket not ready, skipping mount %s -> %s", src, dst)
                 # Terminate child since we won't use it
                 try:
