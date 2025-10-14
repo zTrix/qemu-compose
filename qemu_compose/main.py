@@ -290,10 +290,16 @@ def cli():
             type=str,
             help="Instance ID, unique prefix, or assigned name",
         )
+        start_parser.add_argument(
+            "-f", "--file",
+            type=str,
+            required=False,
+            help="Compose configuration file to parse for QEMU args",
+        )
         start_args = start_parser.parse_args(rest)
 
         from .cmd.start_command import command_start
-        sys.exit(command_start(identifier=start_args.identifier))
+        sys.exit(command_start(identifier=start_args.identifier, config_path=start_args.file))
     else:
         parser.print_help()
         sys.exit(1)
