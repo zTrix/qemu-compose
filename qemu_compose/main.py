@@ -80,6 +80,7 @@ def cli():
   version     Show the qemu-compose version information
   images      List VM images found in local store
   run         Create and run a new VM from an image
+  start       Start an existing VM instance by ID or name
 """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
@@ -277,6 +278,22 @@ def cli():
 
         from .cmd.run_command import command_run
         sys.exit(command_run(image_hint=run_args.image, name=run_args.name, publish=run_args.publish, volumes=run_args.volumes))
+    elif args.command == "start":
+        import argparse as _argparse
+        start_parser = _argparse.ArgumentParser(
+            prog="qemu-compose start",
+            add_help=True,
+            description="Start an existing VM instance by ID or name",
+        )
+        start_parser.add_argument(
+            "identifier",
+            type=str,
+            help="Instance ID, unique prefix, or assigned name",
+        )
+        start_args = start_parser.parse_args(rest)
+
+        from .cmd.start_command import command_start
+        sys.exit(command_start(identifier=start_args.identifier))
     else:
         parser.print_help()
         sys.exit(1)

@@ -86,6 +86,7 @@ class QemuConfig:
     binary: Optional[str] = None
     network: Optional[str] = None     # could be "none", "user", etc, default set to "user" when left None
     image: Optional[str] = None
+    instance: Optional[str] = None
     env: Dict[str, str] = field(default_factory=dict)
     qemu_args: List[Dict[str, str]] = field(default_factory=list)
     ports: List[str] = field(default_factory=list)
@@ -160,18 +161,64 @@ class QemuRunner(QEMUMachine):
                 return 126
             self.image_manifest = manifest
 
-        try:
-            self.vm_name = check_and_get_name(self.store.instance_root, self.config.name)
-        except ValueError as e:
-            print(str(e), file=sys.stderr)
-            return 125
+        if self.config.instance is None:
+            try:
+                self.vm_name = check_and_get_name(self.store.instance_root, self.config.name)
+            except ValueError as e:
+                print(str(e), file=sys.stderr)
+                return 125
+            self.vmid = new_random_vmid(self.store.instance_root)
+        else:
+            # AI_FIX: find name and vmid from existing instance
+            ident = str(self.config.instance)
+            root = self.store.instance_root
+
+            def _safe_read(path: str) -> Optional[str]:
+                try:
+                    with open(path, "r") as f:
+                        return f.read().strip() or None
+                except Exception:
+                    return None
+
+            # Collect ids
+            try:
+                ids = [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
+            except FileNotFoundError:
+                ids = []
+
+            # Exact id
+            if ident in ids:
+                self.vmid = ident
+            else:
+                # Exact name match
+                name_index: Dict[str, str] = {}
+                for iid in ids:
+                    name = _safe_read(os.path.join(root, iid, "name"))
+                    if name:
+                        name_index[name] = iid
+                if ident in name_index:
+                    self.vmid = name_index[ident]
+                else:
+                    # Unique prefix among ids
+                    matches = [i for i in ids if i.startswith(ident)]
+                    if len(matches) == 1:
+                        self.vmid = matches[0]
+                    elif len(matches) == 0:
+                        print(f"instance not found: {ident}", file=sys.stderr)
+                        return 125
+                    else:
+                        preview = ", ".join(sorted(matches)[:8])
+                        more = "" if len(matches) <= 8 else f" ... and {len(matches)-8} more"
+                        print(f"identifier '{ident}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
+                        return 125
+
+            # Read name if present
+            self.vm_name = _safe_read(os.path.join(root, self.vmid, "name"))
 
         self.cid = get_available_guest_cid(1000)
         if self.cid is None:
             print("no available guest cid found, please make sure vhost_vsock module loaded", file=sys.stderr)
             return 124
-
-        self.vmid = new_random_vmid(self.store.instance_root)
 
         log_path = os.path.join(self.store.instance_dir(self.vmid), "qemu-compose.log")
         self.log_file = open(log_path, "wb")
@@ -251,6 +298,11 @@ class QemuRunner(QEMUMachine):
         if self.image_manifest is None:
             return 0
         
+        # When starting an existing instance, reuse existing disk layers
+        if self.config.instance is not None:
+            self.storage_overlays = self._discover_existing_overlays()
+            return 0
+        
         image_dir = os.path.join(self.store.image_root, self.image_manifest.id)
 
         self.storage_overlays = []
@@ -265,6 +317,21 @@ class QemuRunner(QEMUMachine):
             self.storage_overlays.append((overlay_path, disk_spec))
 
         return 0
+
+    def _discover_existing_overlays(self) -> List[Tuple[str, DiskSpec]]:
+        # Find qcow2 overlays in the instance directory; default to virtio
+        try:
+            files = sorted(os.listdir(self.instance_dir))
+        except FileNotFoundError:
+            return []
+        overlays: List[Tuple[str, DiskSpec]] = []
+        for fn in files:
+            if fn.endswith('.qcow2'):
+                path = os.path.join(self.instance_dir, fn)
+                if os.path.isfile(path):
+                    spec = DiskSpec(filename=fn, format='qcow2', opts='if=virtio')
+                    overlays.append((path, spec))
+        return overlays
 
     def execute_script(self, script_key: str):
         script_target = getattr(self.config, script_key, None)
@@ -482,6 +549,9 @@ class QemuRunner(QEMUMachine):
         args.append(f'type=11,value=io.systemd.credential.binary:ssh.authorized_keys.root={pub_b64}')
 
         # storage disks
+        if not self.storage_overlays and self.config.instance is not None:
+            # Lazy discovery when starting existing instance without prepare_storage
+            self.storage_overlays = self._discover_existing_overlays()
         for overlay_path, spec in self.storage_overlays:
             drive_param = drive_param_for(overlay_path, spec)
             args.append('-drive')
