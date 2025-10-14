@@ -113,6 +113,23 @@ class QemuConfig:
             http_serve=d.get("http_serve", {}),
         )
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "binary": self.binary,
+            "network": self.network,
+            "image": self.image,
+            "instance": self.instance,
+            "env": self.env,
+            "qemu_args": self.qemu_args,
+            "ports": self.ports,
+            "volumes": self.volumes,
+            "boot_commands": self.boot_commands,
+            "before_script": self.before_script,
+            "after_script": self.after_script,
+            "http_serve": self.http_serve,
+        }
+
 
 class QemuRunner(QEMUMachine):
     def __init__(self, config: QemuConfig, store: LocalStore, cwd: str):

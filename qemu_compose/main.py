@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from typing import List, Optional
 import os
+import json
 import shlex
 import sys
 import yaml
@@ -26,6 +27,14 @@ def run(config_path, env_update=None):
 
     if (exit_code := vm.check_and_lock()) > 0:
         return exit_code
+
+    # Persist configuration to instance metadata for later reuse (up command)
+    try:
+        cfg_path = os.path.join(vm.instance_dir, "qemu_config")
+        with open(cfg_path, "w") as f:
+            json.dump(vm.config.to_dict(), f)
+    except Exception as e:
+        logger.warning("failed to write qemu_config: %s", e)
 
     vm.prepare_env(env_update=env_update)
 

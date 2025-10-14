@@ -4,6 +4,7 @@ from typing import Optional, List
 import os
 import sys
 import logging
+import json
 
 from qemu_compose.local_store import LocalStore
 from qemu_compose.image import resolve_image
@@ -34,6 +35,14 @@ def command_run(*, image_hint: str, name: Optional[str], publish: Optional[List[
 
     if (exit_code := vm.check_and_lock()) > 0:
         return exit_code
+
+    # Persist resolved configuration to instance metadata for later reuse.
+    try:
+        cfg_path = os.path.join(vm.instance_dir, "qemu_config")
+        with open(cfg_path, "w") as f:
+            json.dump(vm.config.to_dict(), f)
+    except Exception as e:
+        logger.warning("failed to write qemu_config: %s", e)
 
     vm.prepare_env()
 
