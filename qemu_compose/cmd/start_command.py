@@ -65,10 +65,10 @@ def command_start(*, identifier: str = None, config_path: Optional[str] = None) 
         vmid, candidates = _resolve_identifier(identifier, ids, name_index)
 
     if config_path:
-        user_config = QemuConfig.load_yaml(config_path)
+        config = QemuConfig.load_yaml(config_path)
 
-        if not vmid and user_config.name:
-            vmid, candidates = _resolve_identifier(user_config.name, ids, name_index)
+        if not vmid and config.name:
+            vmid, candidates = _resolve_identifier(config.name, ids, name_index)
             
     if vmid is None and not candidates:
         print("Error: instance not found: %s" % identifier, file=sys.stderr, flush=True)
@@ -80,9 +80,11 @@ def command_start(*, identifier: str = None, config_path: Optional[str] = None) 
         print(f"Error: identifier '{identifier}' is ambiguous; matches: {preview}{more}", file=sys.stderr, flush=True)
         return 1
 
+    config.instance = vmid
+
     try:
-        config = QemuConfig.load_json(store.instance_dir(vmid))
-        merged_dict = config.to_dict() | user_config.to_dict()
+        instance_config = QemuConfig.load_json(store.instance_dir(vmid))
+        merged_dict = instance_config.to_dict() | config.to_dict()
         config = QemuConfig.from_dict(merged_dict)
     except Exception:
         logger.exception("merge config exception")
