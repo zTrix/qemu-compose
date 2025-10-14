@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
 from qemu_compose.local_store import LocalStore
+from qemu_compose.utils import safe_read
 
 @dataclass(frozen=True)
 class InstanceMeta:
@@ -12,14 +13,6 @@ class InstanceMeta:
     name: Optional[str]
     cid: Optional[int]
     pid: Optional[int]
-
-
-def _safe_read(path: str) -> Optional[str]:
-    try:
-        with open(path, "r") as f:
-            return f.read().strip() or None
-    except Exception:
-        return None
 
 
 def _to_int(s: Optional[str]) -> Optional[int]:
@@ -51,9 +44,9 @@ def _list_instance_ids(store: LocalStore) -> List[str]:
 def _read_instance_meta(store: LocalStore, instance_id: str) -> InstanceMeta:
     # Avoid side effects: do not create directories while reading
     base = os.path.join(store.instance_root, instance_id)
-    name = _safe_read(os.path.join(base, "name"))
-    cid = _to_int(_safe_read(os.path.join(base, "cid")))
-    pid = _to_int(_safe_read(os.path.join(base, "qemu.pid")))
+    name = safe_read(os.path.join(base, "name"))
+    cid = _to_int(safe_read(os.path.join(base, "cid")))
+    pid = _to_int(safe_read(os.path.join(base, "qemu.pid")))
     return InstanceMeta(instance_id=instance_id, name=name, cid=cid, pid=pid)
 
 

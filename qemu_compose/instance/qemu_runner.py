@@ -17,7 +17,7 @@ from qemu_compose.local_store import LocalStore
 from qemu_compose.instance import prepare_ssh_key
 from qemu_compose.utils.hostnames import to_valid_hostname
 from qemu_compose.utils.vsock import get_available_guest_cid
-from qemu_compose.utils import StreamWrapper
+from qemu_compose.utils import StreamWrapper, safe_read
 from qemu_compose.image import ImageManifest, load_image_by_id, load_image_by_name, DiskSpec
 
 from .name import check_and_get_name
@@ -194,51 +194,11 @@ class QemuRunner(QEMUMachine):
                 return 125
             self.vmid = new_random_vmid(self.store.instance_root)
         else:
-            # AI_FIX: find name and vmid from existing instance
-            ident = str(self.config.instance)
+            self.vmid = str(self.config.instance)
             root = self.store.instance_root
 
-            def _safe_read(path: str) -> Optional[str]:
-                try:
-                    with open(path, "r") as f:
-                        return f.read().strip() or None
-                except Exception:
-                    return None
-
-            # Collect ids
-            try:
-                ids = [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
-            except FileNotFoundError:
-                ids = []
-
-            # Exact id
-            if ident in ids:
-                self.vmid = ident
-            else:
-                # Exact name match
-                name_index: Dict[str, str] = {}
-                for iid in ids:
-                    name = _safe_read(os.path.join(root, iid, "name"))
-                    if name:
-                        name_index[name] = iid
-                if ident in name_index:
-                    self.vmid = name_index[ident]
-                else:
-                    # Unique prefix among ids
-                    matches = [i for i in ids if i.startswith(ident)]
-                    if len(matches) == 1:
-                        self.vmid = matches[0]
-                    elif len(matches) == 0:
-                        print(f"instance not found: {ident}", file=sys.stderr)
-                        return 125
-                    else:
-                        preview = ", ".join(sorted(matches)[:8])
-                        more = "" if len(matches) <= 8 else f" ... and {len(matches)-8} more"
-                        print(f"identifier '{ident}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
-                        return 125
-
             # Read name if present
-            self.vm_name = _safe_read(os.path.join(root, self.vmid, "name"))
+            self.vm_name = safe_read(os.path.join(root, self.vmid, "name"))
 
         self.cid = get_available_guest_cid(1000)
         if self.cid is None:

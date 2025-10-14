@@ -8,16 +8,9 @@ import logging
 from qemu_compose.local_store import LocalStore
 from qemu_compose.instance.qemu_runner import QemuRunner, QemuConfig
 from qemu_compose.qemu.machine.machine import AbnormalShutdown
+from qemu_compose.utils import safe_read
 
 logger = logging.getLogger("qemu-compose.cmd.start_command")
-
-
-def _safe_read(path: str) -> Optional[str]:
-    try:
-        with open(path, "r") as f:
-            return f.read().strip() or None
-    except Exception:
-        return None
 
 
 def _list_vmids(root: str) -> List[str]:
@@ -29,7 +22,7 @@ def _list_vmids(root: str) -> List[str]:
 
 def _build_name_index(root: str) -> Dict[str, str]:
     def name_of(vmid: str) -> Optional[str]:
-        return _safe_read(os.path.join(root, vmid, "name"))
+        return safe_read(os.path.join(root, vmid, "name"))
 
     pairs: List[Tuple[str, Optional[str]]] = [
         (vmid, name_of(vmid)) for vmid in _list_vmids(root)
