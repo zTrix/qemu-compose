@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from typing import List, Optional
 import os
-import json
 import shlex
 import sys
 import yaml
@@ -291,7 +290,7 @@ def cli():
         start_parser.add_argument(
             "identifier",
             type=str,
-            nargs='?'
+            nargs='?',
             help="Instance ID, unique prefix, or assigned name",
         )
         start_parser.add_argument(

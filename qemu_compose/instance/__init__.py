@@ -4,7 +4,7 @@ import uuid
 
 try:
     from Crypto.PublicKey import ECC
-except:
+except Exception:
     from Cryptodome.PublicKey import ECC
 
 def new_random_vmid(instance_root:str) -> str:

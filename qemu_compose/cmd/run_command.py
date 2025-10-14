@@ -4,7 +4,6 @@ from typing import Optional, List
 import os
 import sys
 import logging
-import json
 
 from qemu_compose.local_store import LocalStore
 from qemu_compose.image import resolve_image

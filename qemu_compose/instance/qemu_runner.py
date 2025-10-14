@@ -10,6 +10,7 @@ import logging
 import subprocess
 import time
 import yaml
+import json
 
 from qemu_compose.qemu.machine import QEMUMachine
 from qemu_compose.local_store import LocalStore
