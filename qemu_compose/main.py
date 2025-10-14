@@ -28,13 +28,7 @@ def run(config_path, env_update=None):
     if (exit_code := vm.check_and_lock()) > 0:
         return exit_code
 
-    # Persist configuration to instance metadata for later reuse (up command)
-    try:
-        cfg_path = os.path.join(vm.instance_dir, "qemu_config")
-        with open(cfg_path, "w") as f:
-            json.dump(vm.config.to_dict(), f)
-    except Exception as e:
-        logger.warning("failed to write qemu_config: %s", e)
+    config.save_to(vm.instance_dir)
 
     vm.prepare_env(env_update=env_update)
 
@@ -297,6 +291,7 @@ def cli():
         start_parser.add_argument(
             "identifier",
             type=str,
+            nargs='?'
             help="Instance ID, unique prefix, or assigned name",
         )
         start_parser.add_argument(

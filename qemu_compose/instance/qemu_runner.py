@@ -9,6 +9,7 @@ import shlex
 import logging
 import subprocess
 import time
+import yaml
 
 from qemu_compose.qemu.machine import QEMUMachine
 from qemu_compose.local_store import LocalStore
@@ -114,22 +115,28 @@ class QemuConfig:
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "name": self.name,
-            "binary": self.binary,
-            "network": self.network,
-            "image": self.image,
-            "instance": self.instance,
-            "env": self.env,
-            "qemu_args": self.qemu_args,
-            "ports": self.ports,
-            "volumes": self.volumes,
-            "boot_commands": self.boot_commands,
-            "before_script": self.before_script,
-            "after_script": self.after_script,
-            "http_serve": self.http_serve,
-        }
+        return self.__dict__
 
+    def save_to(self, instance_dir:str):
+        # Persist configuration to instance metadata for later reuse (up command)
+        try:
+            cfg_path = os.path.join(instance_dir, "qemu_config.json")
+            with open(cfg_path, "w") as f:
+                json.dump(self.to_dict(), f)
+        except Exception as e:
+            logger.error("failed to write qemu_config: %s", e)
+
+    @classmethod
+    def load_json(cls, instance_dir:str):
+        cfg_path = os.path.join(instance_dir, "qemu_config.json")
+        with open(cfg_path, "r") as f:
+            return cls.from_dict(json.load(f))
+
+    @classmethod
+    def load_yaml(cls, config_file:str):
+        with open(config_file) as f:
+            obj = yaml.safe_load(f)
+        return cls.from_dict(obj)
 
 class QemuRunner(QEMUMachine):
     def __init__(self, config: QemuConfig, store: LocalStore, cwd: str):

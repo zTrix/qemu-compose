@@ -52,15 +52,24 @@ def _resolve_identifier(token: str, ids: List[str], name_index: Dict[str, str]) 
     return None, matches
 
 
-def command_start(*, identifier: str, config_path: Optional[str] = None) -> int:
+def command_start(*, identifier: str = None, config_path: Optional[str] = None) -> int:
     store = LocalStore()
     instance_root = store.instance_root
 
-    ids = _list_vmids(instance_root)
-    name_index = _build_name_index(instance_root)
+    vmid = candidates = None
 
-    vmid, candidates = _resolve_identifier(identifier, ids, name_index)
+    if identifier:
+        ids = _list_vmids(instance_root)
+        name_index = _build_name_index(instance_root)
 
+        vmid, candidates = _resolve_identifier(identifier, ids, name_index)
+
+    if config_path:
+        user_config = QemuConfig.load_yaml(config_path)
+
+        if not vmid and user_config.name:
+            vmid, candidates = _resolve_identifier(user_config.name, ids, name_index)
+            
     if vmid is None and not candidates:
         print("Error: instance not found: %s" % identifier, file=sys.stderr, flush=True)
         return 1
@@ -71,35 +80,13 @@ def command_start(*, identifier: str, config_path: Optional[str] = None) -> int:
         print(f"Error: identifier '{identifier}' is ambiguous; matches: {preview}{more}", file=sys.stderr, flush=True)
         return 1
 
-    # Optionally parse a config file; when provided, we reuse args/env but force instance mode.
-    def _load_config(path: Optional[str], vmid_value: str) -> QemuConfig:
-        if not path:
-            return QemuConfig(instance=vmid_value)
-        try:
-            import yaml
-            with open(path) as f:
-                obj = yaml.safe_load(f)
-            base = QemuConfig.from_dict(obj or {})
-            return QemuConfig(
-                name=base.name,
-                binary=base.binary,
-                network=base.network,
-                image=None,  # ignore image: starting existing instance
-                instance=vmid_value,
-                env=base.env,
-                qemu_args=base.qemu_args,
-                ports=base.ports,
-                volumes=base.volumes,
-                boot_commands=base.boot_commands,
-                before_script=base.before_script,
-                after_script=base.after_script,
-                http_serve=base.http_serve,
-            )
-        except Exception as e:
-            print(f"Error: failed to parse config file: {e}", file=sys.stderr, flush=True)
-            return QemuConfig(instance=vmid_value)
+    try:
+        config = QemuConfig.load_json(store.instance_dir(vmid))
+        merged_dict = config.to_dict() | user_config.to_dict()
+        config = QemuConfig.from_dict(merged_dict)
+    except:
+        logger.exception("merge config exception")
 
-    config = _load_config(config_path, vmid)
     cwd = os.getcwd()
     vm = QemuRunner(config, store, cwd)
 
