@@ -129,9 +129,11 @@ class QemuConfig:
 
     @classmethod
     def load_json(cls, instance_dir:str):
+        instance_id = safe_read(os.path.join(instance_dir, "instance-id"))
+
         cfg_path = os.path.join(instance_dir, "qemu_config.json")
         with open(cfg_path, "r") as f:
-            return cls.from_dict(json.load(f))
+            return cls.from_dict(json.load(f) | {"instance": instance_id})
 
     @classmethod
     def load_yaml(cls, config_file:str):
