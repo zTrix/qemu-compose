@@ -120,7 +120,7 @@ def cli():
         sub_args = sub_parser.parse_args(rest)
 
         env_update = None
-        if args.project_directory:
+        if sub_args.project_directory:
             env_update = {"CWD": sub_args.project_directory}
 
         conf_path = guess_conf_path(sub_args.file)
