@@ -111,6 +111,8 @@ def cli():
             sys.exit(1)
         sys.exit(run(conf_path, env_update=env_update))
     elif args.command == "ssh":
+        import argparse as _argparse
+
         # Functional helpers scoped to ssh subcommand for clarity.
         def read_text(path: str) -> Optional[str]:
             try:
@@ -171,34 +173,40 @@ def cli():
             cmd = base + [destination] + passthrough
             return cmd, cid_val
 
-        # Parse raw argv after the 'ssh' token to avoid mixing with argparse.
-        try:
-            argv_after_ssh = sys.argv[sys.argv.index("ssh") + 1:]
-        except ValueError:
-            argv_after_ssh = []
+        # Sub-parser for `ssh` to parse identifier and passthrough command from `rest`
+        ssh_parser = _argparse.ArgumentParser(
+            prog="qemu-compose ssh",
+            add_help=True,
+            description="Run ssh with instance key",
+        )
+        ssh_parser.add_argument(
+            "identifier",
+            type=str,
+            help="Instance ID, unique prefix, or assigned name",
+        )
+        ssh_parser.add_argument(
+            "command",
+            nargs=_argparse.REMAINDER,
+            help="Command to run on the instance (passthrough)",
+        )
 
-        if not argv_after_ssh:
-            print("Usage:  qemu-compose ssh VMID|NAME [COMMAND [ARG...]]", file=sys.stderr)
-            sys.exit(1)
+        ssh_args = ssh_parser.parse_args(rest)
 
         store = LocalStore()
         instance_root = store.instance_root
 
         name_index = build_name_index(instance_root)
         ids = list_vmids(instance_root)
-        # Identifier must be the first token after 'ssh'. Supports unique prefix.
-        ident_token = argv_after_ssh[0]
-        vmid, candidates = resolve_identifier_with_prefix(ident_token, ids, name_index)
+        vmid, candidates = resolve_identifier_with_prefix(ssh_args.identifier, ids, name_index)
 
         if vmid is None and not candidates:
-            print("Error: no VMID or NAME matches the given prefix, and it must appear immediately after 'ssh'.", file=sys.stderr)
-            print("Usage:  qemu-compose ssh VMID|NAME [COMMAND [ARG...]]", file=sys.stderr)
+            print("Error: no VMID or NAME matches the given prefix.", file=sys.stderr)
             sys.exit(1)
 
         if vmid is None and candidates:
             preview = ", ".join(sorted(candidates)[:8])
             more = "" if len(candidates) <= 8 else f" ... and {len(candidates)-8} more"
-            print(f"Error: identifier '{ident_token}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
+            print(f"Error: identifier '{ssh_args.identifier}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
             sys.exit(1)
 
         key_path = os.path.join(instance_root, vmid, "ssh-key")
@@ -206,8 +214,7 @@ def cli():
             print("Error: instance key not found: %s" % key_path, file=sys.stderr)
             sys.exit(1)
 
-        # Only passthrough args after the identifier are supported.
-        passthrough = argv_after_ssh[1:]
+        passthrough = ssh_args.command or []
         ssh_cmd, cid_val = build_ssh_cmd(instance_root, vmid, passthrough)
 
         if not cid_val:
