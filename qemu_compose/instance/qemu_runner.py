@@ -82,7 +82,7 @@ class HttpServeConfig:
             access_ip=d.get("access_ip")
         )
 
-@dataclass(frozen=True)
+@dataclass
 class QemuConfig:
     name: Optional[str] = None
     binary: Optional[str] = None
