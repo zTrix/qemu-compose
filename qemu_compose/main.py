@@ -27,6 +27,8 @@ def run(config_path, env_update=None):
     if (exit_code := vm.check_and_lock()) > 0:
         return exit_code
 
+    config.save_to(vm.instance_dir)
+
     vm.prepare_env(env_update=env_update)
 
     if (exit_code := vm.prepare_storage()) > 0:
@@ -80,13 +82,12 @@ def cli():
   version     Show the qemu-compose version information
   images      List VM images found in local store
   run         Create and run a new VM from an image
+  start       Start an existing VM instance by ID or name
 """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
     parser.add_argument("--short", action="store_true", default=False, help="Shows only qemu-compose's version number")
     parser.add_argument('command', type=str, nargs='?', help='command to run')
-    parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
-    parser.add_argument("--project-directory", type=str, help="Specify an alternate working directory (default: the path of the Compose file)")
     # Parse only known top-level args, leave subcommand options for later
     args, rest = parser.parse_known_args()
 
@@ -98,16 +99,38 @@ def cli():
         parser.print_help()
         sys.exit(1)
     elif args.command == "up":
+        import argparse as _argparse
+        # Sub-parser for `up` options to keep scope minimal
+        sub_parser = _argparse.ArgumentParser(
+            prog="qemu-compose up",
+            add_help=True,
+            description="Create and start QEMU vm",
+        )
+        sub_parser.add_argument(
+            "-f", "--file",
+            type=str,
+            help="Compose configuration files",
+        )
+        sub_parser.add_argument(
+            "--project-directory",
+            type=str,
+            help="Specify an alternate working directory (default: the path of the Compose file)",
+        )
+        # Parse only the args following the "ps" command
+        sub_args = sub_parser.parse_args(rest)
+
         env_update = None
         if args.project_directory:
-            env_update = {"CWD": args.project_directory}
+            env_update = {"CWD": sub_args.project_directory}
 
-        conf_path = guess_conf_path(args.file)
+        conf_path = guess_conf_path(sub_args.file)
         if not conf_path:
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
         sys.exit(run(conf_path, env_update=env_update))
     elif args.command == "ssh":
+        import argparse as _argparse
+
         # Functional helpers scoped to ssh subcommand for clarity.
         def read_text(path: str) -> Optional[str]:
             try:
@@ -168,34 +191,40 @@ def cli():
             cmd = base + [destination] + passthrough
             return cmd, cid_val
 
-        # Parse raw argv after the 'ssh' token to avoid mixing with argparse.
-        try:
-            argv_after_ssh = sys.argv[sys.argv.index("ssh") + 1:]
-        except ValueError:
-            argv_after_ssh = []
+        # Sub-parser for `ssh` to parse identifier and passthrough command from `rest`
+        ssh_parser = _argparse.ArgumentParser(
+            prog="qemu-compose ssh",
+            add_help=True,
+            description="Run ssh with instance key",
+        )
+        ssh_parser.add_argument(
+            "identifier",
+            type=str,
+            help="Instance ID, unique prefix, or assigned name",
+        )
+        ssh_parser.add_argument(
+            "command",
+            nargs=_argparse.REMAINDER,
+            help="Command to run on the instance (passthrough)",
+        )
 
-        if not argv_after_ssh:
-            print("Usage:  qemu-compose ssh VMID|NAME [COMMAND [ARG...]]", file=sys.stderr)
-            sys.exit(1)
+        ssh_args = ssh_parser.parse_args(rest)
 
         store = LocalStore()
         instance_root = store.instance_root
 
         name_index = build_name_index(instance_root)
         ids = list_vmids(instance_root)
-        # Identifier must be the first token after 'ssh'. Supports unique prefix.
-        ident_token = argv_after_ssh[0]
-        vmid, candidates = resolve_identifier_with_prefix(ident_token, ids, name_index)
+        vmid, candidates = resolve_identifier_with_prefix(ssh_args.identifier, ids, name_index)
 
         if vmid is None and not candidates:
-            print("Error: no VMID or NAME matches the given prefix, and it must appear immediately after 'ssh'.", file=sys.stderr)
-            print("Usage:  qemu-compose ssh VMID|NAME [COMMAND [ARG...]]", file=sys.stderr)
+            print("Error: no VMID or NAME matches the given prefix.", file=sys.stderr)
             sys.exit(1)
 
         if vmid is None and candidates:
             preview = ", ".join(sorted(candidates)[:8])
             more = "" if len(candidates) <= 8 else f" ... and {len(candidates)-8} more"
-            print(f"Error: identifier '{ident_token}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
+            print(f"Error: identifier '{ssh_args.identifier}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
             sys.exit(1)
 
         key_path = os.path.join(instance_root, vmid, "ssh-key")
@@ -203,8 +232,7 @@ def cli():
             print("Error: instance key not found: %s" % key_path, file=sys.stderr)
             sys.exit(1)
 
-        # Only passthrough args after the identifier are supported.
-        passthrough = argv_after_ssh[1:]
+        passthrough = ssh_args.command or []
         ssh_cmd, cid_val = build_ssh_cmd(instance_root, vmid, passthrough)
 
         if not cid_val:
@@ -277,6 +305,29 @@ def cli():
 
         from .cmd.run_command import command_run
         sys.exit(command_run(image_hint=run_args.image, name=run_args.name, publish=run_args.publish, volumes=run_args.volumes))
+    elif args.command == "start":
+        import argparse as _argparse
+        start_parser = _argparse.ArgumentParser(
+            prog="qemu-compose start",
+            add_help=True,
+            description="Start an existing VM instance by ID or name",
+        )
+        start_parser.add_argument(
+            "identifier",
+            type=str,
+            nargs='?',
+            help="Instance ID, unique prefix, or assigned name",
+        )
+        start_parser.add_argument(
+            "-f", "--file",
+            type=str,
+            required=False,
+            help="Compose configuration file to parse for QEMU args",
+        )
+        start_args = start_parser.parse_args(rest)
+
+        from .cmd.start_command import command_start
+        sys.exit(command_start(identifier=start_args.identifier, config_path=start_args.file))
     else:
         parser.print_help()
         sys.exit(1)

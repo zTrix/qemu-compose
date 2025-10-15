@@ -9,13 +9,15 @@ import shlex
 import logging
 import subprocess
 import time
+import yaml
+import json
 
 from qemu_compose.qemu.machine import QEMUMachine
 from qemu_compose.local_store import LocalStore
 from qemu_compose.instance import prepare_ssh_key
 from qemu_compose.utils.hostnames import to_valid_hostname
 from qemu_compose.utils.vsock import get_available_guest_cid
-from qemu_compose.utils import StreamWrapper
+from qemu_compose.utils import StreamWrapper, safe_read
 from qemu_compose.image import ImageManifest, load_image_by_id, load_image_by_name, DiskSpec
 
 from .name import check_and_get_name
@@ -80,12 +82,13 @@ class HttpServeConfig:
             access_ip=d.get("access_ip")
         )
 
-@dataclass(frozen=True)
+@dataclass
 class QemuConfig:
     name: Optional[str] = None
     binary: Optional[str] = None
     network: Optional[str] = None     # could be "none", "user", etc, default set to "user" when left None
     image: Optional[str] = None
+    instance: Optional[str] = None
     env: Dict[str, str] = field(default_factory=dict)
     qemu_args: List[Dict[str, str]] = field(default_factory=list)
     ports: List[str] = field(default_factory=list)
@@ -112,6 +115,31 @@ class QemuConfig:
             http_serve=d.get("http_serve", {}),
         )
 
+    def to_dict(self) -> Dict[str, Any]:
+        return self.__dict__
+
+    def save_to(self, instance_dir:str):
+        # Persist configuration to instance metadata for later reuse (up command)
+        try:
+            cfg_path = os.path.join(instance_dir, "qemu_config.json")
+            with open(cfg_path, "w") as f:
+                json.dump(self.to_dict(), f)
+        except Exception as e:
+            logger.error("failed to write qemu_config: %s", e)
+
+    @classmethod
+    def load_json(cls, instance_dir:str):
+        instance_id = safe_read(os.path.join(instance_dir, "instance-id"))
+
+        cfg_path = os.path.join(instance_dir, "qemu_config.json")
+        with open(cfg_path, "r") as f:
+            return cls.from_dict(json.load(f) | {"instance": instance_id})
+
+    @classmethod
+    def load_yaml(cls, config_file:str):
+        with open(config_file) as f:
+            obj = yaml.safe_load(f)
+        return cls.from_dict(obj)
 
 class QemuRunner(QEMUMachine):
     def __init__(self, config: QemuConfig, store: LocalStore, cwd: str):
@@ -125,7 +153,7 @@ class QemuRunner(QEMUMachine):
         self.vmid: Optional[str] = None
         self.log_file = None
         self.image_manifest: Optional[ImageManifest] = None
-        self.storage_overlays: List[Tuple[str, DiskSpec]] = []
+        self.storage_overlays: List[DiskSpec] = []
         self.virtiofs_children: List[subprocess.Popen] = []
 
         if config.binary:
@@ -160,18 +188,24 @@ class QemuRunner(QEMUMachine):
                 return 126
             self.image_manifest = manifest
 
-        try:
-            self.vm_name = check_and_get_name(self.store.instance_root, self.config.name)
-        except ValueError as e:
-            print(str(e), file=sys.stderr)
-            return 125
+        if self.config.instance is None:
+            try:
+                self.vm_name = check_and_get_name(self.store.instance_root, self.config.name)
+            except ValueError as e:
+                print(str(e), file=sys.stderr)
+                return 125
+            self.vmid = new_random_vmid(self.store.instance_root)
+        else:
+            self.vmid = str(self.config.instance)
+            root = self.store.instance_root
+
+            # Read name if present
+            self.vm_name = safe_read(os.path.join(root, self.vmid, "name"))
 
         self.cid = get_available_guest_cid(1000)
         if self.cid is None:
             print("no available guest cid found, please make sure vhost_vsock module loaded", file=sys.stderr)
             return 124
-
-        self.vmid = new_random_vmid(self.store.instance_root)
 
         log_path = os.path.join(self.store.instance_dir(self.vmid), "qemu-compose.log")
         self.log_file = open(log_path, "wb")
@@ -251,9 +285,15 @@ class QemuRunner(QEMUMachine):
         if self.image_manifest is None:
             return 0
         
+        # When starting an existing instance, reuse existing disk layers
+        if self.config.instance is not None:
+            self.storage_overlays = self._discover_existing_overlays()
+            return 0
+        
         image_dir = os.path.join(self.store.image_root, self.image_manifest.id)
 
         self.storage_overlays = []
+        obj = []
 
         for disk_spec in self.image_manifest.disks:
             base_disk_path = os.path.join(image_dir, disk_spec.filename)
@@ -262,9 +302,31 @@ class QemuRunner(QEMUMachine):
             if rc != 0:
                 print(f"Failed to create overlay for disk {disk_spec.filename}", file=sys.stderr, flush=True)
                 return rc
-            self.storage_overlays.append((overlay_path, disk_spec))
+            self.storage_overlays.append(disk_spec)
+            obj.append(disk_spec.to_dict())
+
+        with open(os.path.join(self.instance_dir, "storage.json"), "w") as f:
+            json.dump({
+                "disks": obj,
+            }, f)
 
         return 0
+
+    def _discover_existing_overlays(self) -> List[DiskSpec]:
+        # Discover stored disk specs from instance metadata
+        try:
+            with open(os.path.join(self.instance_dir, "storage.json")) as f:
+                obj = json.load(f)
+            disks = []
+            for item in obj.get("disks", []):
+                try:
+                    disks.append(DiskSpec.from_dict(item))
+                except Exception:
+                    # Skip malformed entries
+                    pass
+            return disks
+        except FileNotFoundError:
+            return []
 
     def execute_script(self, script_key: str):
         script_target = getattr(self.config, script_key, None)
@@ -482,7 +544,12 @@ class QemuRunner(QEMUMachine):
         args.append(f'type=11,value=io.systemd.credential.binary:ssh.authorized_keys.root={pub_b64}')
 
         # storage disks
-        for overlay_path, spec in self.storage_overlays:
+        if not self.storage_overlays and self.config.instance is not None:
+            # Lazy discovery when starting existing instance without prepare_storage
+            self.storage_overlays = self._discover_existing_overlays()
+
+        for spec in self.storage_overlays:
+            overlay_path = os.path.join(self.instance_dir, spec.filename)
             drive_param = drive_param_for(overlay_path, spec)
             args.append('-drive')
             args.append(drive_param)

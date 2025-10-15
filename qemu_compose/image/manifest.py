@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 import datetime
 import os
 import json
@@ -19,6 +19,17 @@ class DiskSpec:
         fmt = a[1] if len(a) > 1 else "qcow2"
         opts = a[2] if len(a) > 2 else ""
         return DiskSpec(filename=a[0], format=fmt, opts=opts)
+
+    @classmethod
+    def from_dict(cls, d:Dict[str, str]) -> "DiskSpec":
+        return DiskSpec(
+            filename=d.get("filename"),
+            format=d.get("format"),
+            opts=d.get("opts"),
+        )
+
+    def to_dict(self):
+        return self.__dict__
 
 @dataclass(frozen=True)
 class RepoTag:

@@ -35,6 +35,8 @@ def command_run(*, image_hint: str, name: Optional[str], publish: Optional[List[
     if (exit_code := vm.check_and_lock()) > 0:
         return exit_code
 
+    config.save_to(vm.instance_dir)
+
     vm.prepare_env()
 
     if (exit_code := vm.prepare_storage()) > 0:

@@ -4,7 +4,7 @@ import uuid
 
 try:
     from Crypto.PublicKey import ECC
-except:
+except Exception:
     from Cryptodome.PublicKey import ECC
 
 def new_random_vmid(instance_root:str) -> str:
@@ -13,6 +13,10 @@ def new_random_vmid(instance_root:str) -> str:
 def prepare_ssh_key(instance_dir:str, vmid:str) -> bytes:
     priv_key_path = os.path.join(instance_dir, "ssh-key")
     pub_key_path = os.path.join(instance_dir, "ssh-key.pub")
+
+    if os.path.exists(priv_key_path) and os.path.exists(pub_key_path):
+        with open(pub_key_path, 'rb') as pf:
+            return pf.read()
 
     # create new key pair using PyCryptodome
     key = ECC.generate(curve='ed25519')
