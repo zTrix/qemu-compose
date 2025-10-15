@@ -14,6 +14,10 @@ def prepare_ssh_key(instance_dir:str, vmid:str) -> bytes:
     priv_key_path = os.path.join(instance_dir, "ssh-key")
     pub_key_path = os.path.join(instance_dir, "ssh-key.pub")
 
+    if os.path.exists(priv_key_path) and os.path.exists(pub_key_path):
+        with open(pub_key_path, 'rb') as pf:
+            return pf.read()
+
     # create new key pair using PyCryptodome
     key = ECC.generate(curve='ed25519')
     priv_pem = key.export_key(format='PEM')
