@@ -151,7 +151,7 @@ class QemuRunner(QEMUMachine):
         self.vmid: Optional[str] = None
         self.log_file = None
         self.image_manifest: Optional[ImageManifest] = None
-        self.storage_overlays: List[Tuple[str, DiskSpec]] = []
+        self.storage_overlays: List[DiskSpec] = []
         self.virtiofs_children: List[subprocess.Popen] = []
 
         if config.binary:
@@ -291,6 +291,7 @@ class QemuRunner(QEMUMachine):
         image_dir = os.path.join(self.store.image_root, self.image_manifest.id)
 
         self.storage_overlays = []
+        obj = []
 
         for disk_spec in self.image_manifest.disks:
             base_disk_path = os.path.join(image_dir, disk_spec.filename)
@@ -299,24 +300,31 @@ class QemuRunner(QEMUMachine):
             if rc != 0:
                 print(f"Failed to create overlay for disk {disk_spec.filename}", file=sys.stderr, flush=True)
                 return rc
-            self.storage_overlays.append((overlay_path, disk_spec))
+            self.storage_overlays.append(disk_spec)
+            obj.append(disk_spec.to_dict())
+
+        with open(os.path.join(self.instance_dir, "storage.json"), "w") as f:
+            json.dump({
+                "disks": obj,
+            }, f)
 
         return 0
 
-    def _discover_existing_overlays(self) -> List[Tuple[str, DiskSpec]]:
-        # Find qcow2 overlays in the instance directory; default to virtio
+    def _discover_existing_overlays(self) -> List[DiskSpec]:
+        # Discover stored disk specs from instance metadata
         try:
-            files = sorted(os.listdir(self.instance_dir))
+            with open(os.path.join(self.instance_dir, "storage.json")) as f:
+                obj = json.load(f)
+            disks = []
+            for item in obj.get("disks", []):
+                try:
+                    disks.append(DiskSpec.from_dict(item))
+                except Exception:
+                    # Skip malformed entries
+                    pass
+            return disks
         except FileNotFoundError:
             return []
-        overlays: List[Tuple[str, DiskSpec]] = []
-        for fn in files:
-            if fn.endswith('.qcow2'):
-                path = os.path.join(self.instance_dir, fn)
-                if os.path.isfile(path):
-                    spec = DiskSpec(filename=fn, format='qcow2', opts='if=virtio')
-                    overlays.append((path, spec))
-        return overlays
 
     def execute_script(self, script_key: str):
         script_target = getattr(self.config, script_key, None)
@@ -537,7 +545,9 @@ class QemuRunner(QEMUMachine):
         if not self.storage_overlays and self.config.instance is not None:
             # Lazy discovery when starting existing instance without prepare_storage
             self.storage_overlays = self._discover_existing_overlays()
-        for overlay_path, spec in self.storage_overlays:
+
+        for spec in self.storage_overlays:
+            overlay_path = os.path.join(self.instance_dir, spec.filename)
             drive_param = drive_param_for(overlay_path, spec)
             args.append('-drive')
             args.append(drive_param)

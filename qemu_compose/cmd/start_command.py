@@ -90,7 +90,8 @@ def command_start(*, identifier: str = None, config_path: Optional[str] = None) 
 
     vm.prepare_env()
 
-    # Important: do NOT call vm.prepare_storage() for existing instances
+    if (exit_code := vm.prepare_storage()) > 0:
+        return exit_code
 
     vm.execute_script('before_script')
     vm.setup_qemu_args()
