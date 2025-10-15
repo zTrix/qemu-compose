@@ -88,8 +88,6 @@ def cli():
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
     parser.add_argument("--short", action="store_true", default=False, help="Shows only qemu-compose's version number")
     parser.add_argument('command', type=str, nargs='?', help='command to run')
-    parser.add_argument('-f', "--file", type=str, help='Compose configuration files')
-    parser.add_argument("--project-directory", type=str, help="Specify an alternate working directory (default: the path of the Compose file)")
     # Parse only known top-level args, leave subcommand options for later
     args, rest = parser.parse_known_args()
 
@@ -101,11 +99,31 @@ def cli():
         parser.print_help()
         sys.exit(1)
     elif args.command == "up":
+        import argparse as _argparse
+        # Sub-parser for `up` options to keep scope minimal
+        sub_parser = _argparse.ArgumentParser(
+            prog="qemu-compose up",
+            add_help=True,
+            description="Create and start QEMU vm",
+        )
+        sub_parser.add_argument(
+            "-f", "--file",
+            type=str,
+            help="Compose configuration files",
+        )
+        sub_parser.add_argument(
+            "--project-directory",
+            type=str,
+            help="Specify an alternate working directory (default: the path of the Compose file)",
+        )
+        # Parse only the args following the "ps" command
+        sub_args = sub_parser.parse_args(rest)
+
         env_update = None
         if args.project_directory:
-            env_update = {"CWD": args.project_directory}
+            env_update = {"CWD": sub_args.project_directory}
 
-        conf_path = guess_conf_path(args.file)
+        conf_path = guess_conf_path(sub_args.file)
         if not conf_path:
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
