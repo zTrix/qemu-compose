@@ -3,6 +3,7 @@ import fcntl
 import struct
 import errno
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +12,7 @@ VHOST_VSOCK_SET_GUEST_CID = 0x4008AF60
 VSOCK_PATH = '/dev/vhost-vsock'
 
 
-def get_available_guest_cid(start_guest_cid: int = 1000) -> None | int:
+def get_available_guest_cid(start_guest_cid: int = 1000) -> Optional[int]:
     """
     get available guest cid
 
