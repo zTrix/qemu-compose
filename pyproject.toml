@@ -4,7 +4,7 @@ authors = [
     {name = "Wenlei Zhu", email = "i@ztrix.me"},
     {name = "Zhen Tang", email = "tangzhen23@foxmail.com"},
 ]
-version = "0.8.5"
+version = "0.8.6"
 readme = "README.md"
 description = "docker-compose style composer for qemu"
 keywords = ["qemu", "qemu_compose", "qemu-compose"]
