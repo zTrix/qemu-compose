@@ -62,22 +62,22 @@ def _truncate_instance_id(iid: str, length: int = 12) -> str:
     return iid[:length]
 
 
-def _column_specs() -> Tuple[int, int, int, int]:
-    # Fixed widths for deterministic alignment: id, name, cid, pid
-    return (12, 20, 6, 8)
+def _column_specs(name_w: int) -> Tuple[int, int, int, int]:
+    # Fixed widths for deterministic alignment except name which is dynamic
+    return (12, name_w, 6, 8)
 
 
-def _format_header() -> str:
-    id_w, name_w, cid_w, pid_w = _column_specs()
+def _format_header(name_w: int) -> str:
+    id_w, name_w, cid_w, pid_w = _column_specs(name_w)
     return f"{'INSTANCE_ID':{id_w}}  {'NAME':{name_w}}  {'CID':{cid_w}}  {'QEMU PID':{pid_w}}  STATUS"
 
 
-def _format_row(meta: InstanceMeta) -> str:
+def _format_row(meta: InstanceMeta, name_w: int) -> str:
     status = "running" if _is_pid_running(meta.pid) else "exited"
     name = meta.name or "-"
     cid = "-" if meta.cid is None else str(meta.cid)
     pid = "-" if meta.pid is None else str(meta.pid)
-    id_w, name_w, cid_w, pid_w = _column_specs()
+    id_w, name_w, cid_w, pid_w = _column_specs(name_w)
     iid = _truncate_instance_id(meta.instance_id, id_w)
     # Left-align strings; right-align numeric-looking fields for clarity
     return (
@@ -89,9 +89,21 @@ def _format_row(meta: InstanceMeta) -> str:
     )
 
 
+def _compute_name_width(instances: Iterable[InstanceMeta]) -> int:
+    # Ensure at least the header width; adapt to longest name
+    names = [m.name or "-" for m in instances]
+    longest = max((len(n) for n in names), default=0)
+    return max(len("NAME"), longest)
+
+
 def _print_table(instances: Iterable[InstanceMeta]) -> None:
-    header = _format_header()
-    lines = [header, "-" * len(header), *map(_format_row, instances)]
+    name_w = _compute_name_width(instances)
+    header = _format_header(name_w)
+    rows = [
+        _format_row(m, name_w)
+        for m in instances
+    ]
+    lines = [header, "-" * len(header), *rows]
     print("\n".join(lines))
 
 
