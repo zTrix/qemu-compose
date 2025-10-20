@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 from qemu_compose.local_store import LocalStore
 from qemu_compose.utils import safe_read
@@ -58,20 +58,41 @@ def _filter_instances(instances: Iterable[InstanceMeta], show_all: bool) -> List
     return [m for m in instances if show_all or _is_pid_running(m.pid)]
 
 
+def _truncate_instance_id(iid: str, length: int = 12) -> str:
+    return iid[:length]
+
+
+def _column_specs() -> Tuple[int, int, int, int]:
+    # Fixed widths for deterministic alignment: id, name, cid, pid
+    return (12, 20, 6, 8)
+
+
+def _format_header() -> str:
+    id_w, name_w, cid_w, pid_w = _column_specs()
+    return f"{'INSTANCE_ID':{id_w}}  {'NAME':{name_w}}  {'CID':{cid_w}}  {'QEMU PID':{pid_w}}  STATUS"
+
+
 def _format_row(meta: InstanceMeta) -> str:
     status = "running" if _is_pid_running(meta.pid) else "exited"
     name = meta.name or "-"
-    cid = str(meta.cid) if meta.cid is not None else "-"
-    pid = str(meta.pid) if meta.pid is not None else "-"
-    return f"{meta.instance_id:12}  {name:20}  {cid:6}  {pid:8}  {status}"
+    cid = "-" if meta.cid is None else str(meta.cid)
+    pid = "-" if meta.pid is None else str(meta.pid)
+    id_w, name_w, cid_w, pid_w = _column_specs()
+    iid = _truncate_instance_id(meta.instance_id, id_w)
+    # Left-align strings; right-align numeric-looking fields for clarity
+    return (
+        f"{iid:<{id_w}}  "
+        f"{name:<{name_w}}  "
+        f"{cid:>{cid_w}}  "
+        f"{pid:>{pid_w}}  "
+        f"{status}"
+    )
 
 
 def _print_table(instances: Iterable[InstanceMeta]) -> None:
-    header = f"{'INSTANCE_ID':12}  {'NAME':20}  {'CID':6}  {'QEMU PID':8}  STATUS"
-    print(header)
-    print("-" * len(header))
-    for m in instances:
-        print(_format_row(m))
+    header = _format_header()
+    lines = [header, "-" * len(header), *map(_format_row, instances)]
+    print("\n".join(lines))
 
 
 def command_ps(show_all: bool) -> int:
