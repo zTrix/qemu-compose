@@ -105,6 +105,7 @@ class QemuConfig:
             binary=d.get("binary"),
             network=d.get("network"),
             image=d.get("image"),
+            instance=d.get("instance"),
             env=d.get("env", []),
             qemu_args=d.get("qemu_args", []),
             ports=d.get("ports", []),

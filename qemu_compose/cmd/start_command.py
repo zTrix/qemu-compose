@@ -78,7 +78,9 @@ def command_start(*, identifier: str = None, config_path: Optional[str] = None) 
 
     try:
         instance_config = QemuConfig.load_json(store.instance_dir(vmid))
-        merged_dict = instance_config.to_dict() | config.to_dict()
+        merged_dict = instance_config.to_dict() | {"instance": vmid}
+        if config:
+            merged_dict = merged_dict | config.to_dict()
         config = QemuConfig.from_dict(merged_dict)
     except Exception:
         logger.exception("merge config exception")
