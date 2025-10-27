@@ -122,8 +122,12 @@ def _execute_dockerfile_command(cmd: str, env: dict) -> str:
                     raise ValueError(f"Size mismatch: expected {expected_size}, got {actual_size}")
                 
                 if expected_hash:
+                    hash_obj = hashlib.sha256()
                     with open(filename, 'rb') as f:
-                        file_hash = hashlib.md5(f.read()).hexdigest()
+                        while chunk := f.read(65536):
+                            hash_obj.update(chunk)
+                    file_hash = hash_obj.hexdigest()
+                    
                     if file_hash != expected_hash:
                         raise ValueError(f"Hash mismatch: expected {expected_hash}, got {file_hash}")
                     print(f"Hash verified: {file_hash}")
