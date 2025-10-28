@@ -1,5 +1,6 @@
 
 import datetime
+from typing import Union
 
 
 '''
@@ -38,7 +39,7 @@ def as_utc_time(d:datetime.datetime):
         d = d.replace(tzinfo=datetime.timezone.utc)
     return d.astimezone(datetime.timezone.utc)
 
-def parse_datetime(v: str | int | float) -> datetime.datetime:
+def parse_datetime(v: Union[str, int, float]) -> datetime.datetime:
 	if isinstance(v, (int, float)):
 		return datetime.datetime.fromtimestamp(float(v), tz=datetime.timezone.utc)
 

@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 from typing import List, Optional
 import os
-import shlex
+import re
 import sys
 import yaml
 import logging
+import shutil
+import threading
+import tty
+import subprocess
+import urllib.request
+import shlex
+from functools import partial
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
+from .qemu.machine import QEMUMachine
 from .qemu.machine.machine import AbnormalShutdown
 from .local_store import LocalStore
 from .instance.qemu_runner import QemuConfig, QemuRunner
@@ -13,7 +22,182 @@ from .instance.qemu_runner import QemuConfig, QemuRunner
 
 logger = logging.getLogger("qemu-compose")
 
-def run(config_path, env_update=None):
+def _is_dockerfile_command(cmd: str) -> bool:
+    cmd = cmd.strip().upper()
+    return cmd.startswith(('DOWNLOAD ', 'COPY ', 'RUN ', 'ENV ', 'WORKDIR ', 'VERIFY ', 'SHELL '))
+
+def _execute_dockerfile_command(cmd: str, env: dict) -> str:
+    import hashlib
+    
+    cmd = cmd.strip()
+    command_parts = cmd.split(None, 1) 
+    if len(command_parts) < 2:
+        return cmd  
+    
+    command_name = command_parts[0].upper()
+    args = command_parts[1]
+    
+    try:
+        if command_name == 'DOWNLOAD':
+            # DOWNLOAD url filename [expected_size]
+            parts = args.split()
+            if len(parts) >= 2:
+                url = parts[0].format(**env)
+                filename = parts[1].format(**env)
+                expected_size = int(parts[2]) if len(parts) > 2 else None
+                
+                print(f"Downloading {url} to {filename}...")
+                urllib.request.urlretrieve(url, filename)
+                
+                if expected_size:
+                    actual_size = os.path.getsize(filename)
+                    if actual_size != expected_size:
+                        print(f"Warning: Expected size {expected_size}, got {actual_size}")
+                    else:
+                        print(f"Download completed, size verified: {actual_size}")
+                else:
+                    actual_size = os.path.getsize(filename)
+                    print(f"Download completed, size: {actual_size}")
+                
+                return f"# Downloaded: {filename}"
+        
+        elif command_name == 'COPY':
+            # COPY source dest
+            parts = args.split()
+            if len(parts) >= 2:
+                source = parts[0].format(**env)
+                dest = parts[1].format(**env)
+                print(f"Copying {source} to {dest}...")
+                if os.path.isdir(source):
+                    shutil.copytree(source, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(source, dest)
+                print(f"Copy completed: {source} -> {dest}")
+                return f"# Copied: {source} -> {dest}"
+        
+        elif command_name == 'RUN':
+            # RUN command
+            command = args.format(**env)
+            print(f"Running: {command}")
+            result = subprocess.run(command, shell=True, check=True, 
+                                  capture_output=True, text=True)
+            if result.stdout:
+                print(f"Output: {result.stdout}")
+            return f"# Executed: {command}"
+        
+        elif command_name == 'ENV':
+            # ENV key=value
+            if '=' in args:
+                key, value = args.split('=', 1)
+                key = key.strip()
+                value = value.format(**env).strip()
+                env[key] = value
+                os.environ[key] = value
+                print(f"Set environment variable: {key}={value}")
+                return f"# Set ENV: {key}={value}"
+        
+        elif command_name == 'WORKDIR':
+            # WORKDIR path
+            path = args.format(**env)
+            os.makedirs(path, exist_ok=True)
+            os.chdir(path)
+            print(f"Changed working directory to: {path}")
+            return f"# Changed to: {path}"
+        
+        elif command_name == 'VERIFY':
+            # VERIFY filename [expected_size] [hash_type:hash_value]
+            # hash_type can be 'md5' or 'sha256'
+            parts = args.split()
+            if len(parts) >= 1:
+                filename = parts[0].format(**env)
+                expected_size = int(parts[1]) if len(parts) > 1 else None
+                hash_spec = parts[2] if len(parts) > 2 else None
+                
+                if not os.path.exists(filename):
+                    raise FileNotFoundError(f"File not found: {filename}")
+                
+                actual_size = os.path.getsize(filename)
+                print(f"Verifying {filename}...")
+                
+                if expected_size and actual_size != expected_size:
+                    raise ValueError(f"Size mismatch: expected {expected_size}, got {actual_size}")
+                
+                if hash_spec:
+                    # Parse hash specification: "md5:hash_value" or "sha256:hash_value"
+                    if ':' in hash_spec:
+                        hash_type, expected_hash = hash_spec.split(':', 1)
+                        hash_type = hash_type.lower()
+                    else:
+                        # Default to sha256 for backward compatibility
+                        hash_type = 'sha256'
+                        expected_hash = hash_spec
+                    
+                    # Create appropriate hash object
+                    if hash_type == 'md5':
+                        hash_obj = hashlib.md5()
+                    elif hash_type == 'sha256':
+                        hash_obj = hashlib.sha256()
+                    else:
+                        raise ValueError(f"Unsupported hash type: {hash_type}. Supported types: md5, sha256")
+                    
+                    # Calculate file hash
+                    with open(filename, 'rb') as f:
+                        while chunk := f.read(65536):
+                            hash_obj.update(chunk)
+                    file_hash = hash_obj.hexdigest()
+                    
+                    if file_hash != expected_hash:
+                        raise ValueError(f"Hash mismatch ({hash_type}): expected {expected_hash}, got {file_hash}")
+                    print(f"Hash verified ({hash_type}): {file_hash}")
+                
+                print(f"Verification passed, size: {actual_size}")
+                return f"# Verified: {filename}"
+        
+        elif command_name == 'SHELL':
+            # SHELL command
+            command = args.format(**env)
+            print(f"Shell: {command}")
+            result = subprocess.run(command, shell=True, check=True, 
+                                  capture_output=True, text=True)
+            if result.stdout:
+                print(f"Output: {result.stdout}")
+            if result.stderr:
+                print(f"Error: {result.stderr}")
+            return f"# Shell: {command}"
+    
+    except Exception as e:
+        print(f"Warning: Dockerfile command failed: {e}")
+        return cmd  
+    
+    return cmd 
+
+def execute_script_commands(script_lines, env):
+    if not script_lines:
+        return
+    
+    for line in script_lines:
+        if isinstance(line, str) and not line.strip():
+            continue
+        if isinstance(line, list) and not line:
+            continue
+        
+        if isinstance(line, list):
+            print(f"Executing exec command: {line}")
+            subprocess.run(line, check=True)
+            continue
+
+        if isinstance(line, str):
+            if _is_dockerfile_command(line.strip()):
+                result = _execute_dockerfile_command(line, env)
+                if result.startswith('#'):
+                    continue
+            
+            command = line.format(**env)
+            if command.strip():
+                print(f"Executing: {command}")
+                subprocess.run(command.strip(), shell=True, check=True)
+
+def run(config_path, log_path=None, env_update=None):
     store = LocalStore()
     cwd = os.path.normpath(os.path.abspath(os.path.dirname(config_path)))
 
@@ -34,13 +218,16 @@ def run(config_path, env_update=None):
     if (exit_code := vm.prepare_storage()) > 0:
         return exit_code
 
-    vm.execute_script('before_script')
+    if config_obj.get('before_script'):
+        execute_script_commands(config_obj.get('before_script'), vm.env)
+    
     vm.setup_qemu_args()
 
     try:
         vm.start()
         vm.interact()
-        vm.execute_script('after_script')
+        if config_obj.get('after_script'):
+            execute_script_commands(config_obj.get('after_script'), vm.env)
     except KeyboardInterrupt:
         logger.warning("Keyboard interrupt, shutting down vm...")
     finally:
@@ -54,7 +241,7 @@ def run(config_path, env_update=None):
                 vm.cleanup()
     return 0
 
-def guess_conf_path(p:str | None):
+def guess_conf_path(p: Optional[str]):
     if p:
         return p
     for f in ["qemu-compose.yml", "qemu-compose.yaml"]:
