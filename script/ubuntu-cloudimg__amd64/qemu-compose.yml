@@ -8,7 +8,7 @@ env:
   expected_hash: "bd3be1d51997ea4ecf4905b3c3721763456b10d1a8dd987b8f1e4bed0d4c0514"
 before_script:
   - DOWNLOAD {image_url} {base_image} {expected_size}
-  - VERIFY sha256 {base_image} {expected_hash}
+  - VERIFY {base_image} {expected_size} sha256:{expected_hash}
   - SHELL mkdir -p http
   - SHELL printf '#cloud-config\npassword\x3a _\nchpasswd\x3a\n  expire\x3a False\n\n' > http/user-data
   - SHELL printf 'instance-id\x3a ubuntu/test\n' > http/meta-data

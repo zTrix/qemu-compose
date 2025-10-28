@@ -105,12 +105,13 @@ def _execute_dockerfile_command(cmd: str, env: dict) -> str:
             return f"# Changed to: {path}"
         
         elif command_name == 'VERIFY':
-            # VERIFY filename [expected_size] [expected_hash]
+            # VERIFY filename [expected_size] [hash_type:hash_value]
+            # hash_type can be 'md5' or 'sha256'
             parts = args.split()
             if len(parts) >= 1:
                 filename = parts[0].format(**env)
                 expected_size = int(parts[1]) if len(parts) > 1 else None
-                expected_hash = parts[2] if len(parts) > 2 else None
+                hash_spec = parts[2] if len(parts) > 2 else None
                 
                 if not os.path.exists(filename):
                     raise FileNotFoundError(f"File not found: {filename}")
@@ -121,16 +122,33 @@ def _execute_dockerfile_command(cmd: str, env: dict) -> str:
                 if expected_size and actual_size != expected_size:
                     raise ValueError(f"Size mismatch: expected {expected_size}, got {actual_size}")
                 
-                if expected_hash:
-                    hash_obj = hashlib.sha256()
+                if hash_spec:
+                    # Parse hash specification: "md5:hash_value" or "sha256:hash_value"
+                    if ':' in hash_spec:
+                        hash_type, expected_hash = hash_spec.split(':', 1)
+                        hash_type = hash_type.lower()
+                    else:
+                        # Default to sha256 for backward compatibility
+                        hash_type = 'sha256'
+                        expected_hash = hash_spec
+                    
+                    # Create appropriate hash object
+                    if hash_type == 'md5':
+                        hash_obj = hashlib.md5()
+                    elif hash_type == 'sha256':
+                        hash_obj = hashlib.sha256()
+                    else:
+                        raise ValueError(f"Unsupported hash type: {hash_type}. Supported types: md5, sha256")
+                    
+                    # Calculate file hash
                     with open(filename, 'rb') as f:
                         while chunk := f.read(65536):
                             hash_obj.update(chunk)
                     file_hash = hash_obj.hexdigest()
                     
                     if file_hash != expected_hash:
-                        raise ValueError(f"Hash mismatch: expected {expected_hash}, got {file_hash}")
-                    print(f"Hash verified: {file_hash}")
+                        raise ValueError(f"Hash mismatch ({hash_type}): expected {expected_hash}, got {file_hash}")
+                    print(f"Hash verified ({hash_type}): {file_hash}")
                 
                 print(f"Verification passed, size: {actual_size}")
                 return f"# Verified: {filename}"
