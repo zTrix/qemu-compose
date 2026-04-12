@@ -75,7 +75,7 @@ def cli():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Define and run QEMU VM with qemu",
         usage="qemu-compose [OPTIONS] COMMAND",
-        epilog="""Commands:
+epilog="""Commands:
   up          Create and start QEMU vm
   ssh         Run ssh with instance key
   ps          List VM instances
@@ -83,7 +83,8 @@ def cli():
   images      List VM images found in local store
   run         Create and run a new VM from an image
   start       Start an existing VM instance by ID or name
-""",
+  down        Stop and remove a VM instance
+ """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
     parser.add_argument("--short", action="store_true", default=False, help="Shows only qemu-compose's version number")
@@ -328,6 +329,29 @@ def cli():
 
         from .cmd.start_command import command_start
         sys.exit(command_start(identifier=start_args.identifier, config_path=start_args.file))
+    elif args.command == "down":
+        import argparse as _argparse
+        down_parser = _argparse.ArgumentParser(
+            prog="qemu-compose down",
+            add_help=True,
+            description="Stop and remove a VM instance",
+        )
+        down_parser.add_argument(
+            "identifier",
+            type=str,
+            nargs='?',
+            help="Instance ID, unique prefix, or assigned name",
+        )
+        down_parser.add_argument(
+            "-f", "--force",
+            action="store_true",
+            default=False,
+            help="Force removal without confirmation",
+        )
+        down_args = down_parser.parse_args(rest)
+
+        from .cmd.down_command import command_down
+        sys.exit(command_down(identifier=down_args.identifier, force=down_args.force))
     else:
         parser.print_help()
         sys.exit(1)
