@@ -47,7 +47,9 @@ def _rows_for_image(image_root: str, image_id: str) -> List[Tuple[str, str, str,
 
 
 def list_image(image_root: str) -> List[Tuple[str, str, str, str, str]]:
-    return [row for image_id in list_subdirs(image_root) for row in _rows_for_image(image_root, image_id)]
+    rows = [row for image_id in list_subdirs(image_root) for row in _rows_for_image(image_root, image_id)]
+    rows.sort(key=lambda r: (r[0], r[1]))
+    return rows
 
 def load_image_by_id(image_root: str, image_id: str) -> Optional[ImageManifest]:
     dir_path = os.path.join(image_root, image_id)
