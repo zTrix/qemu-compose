@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "pyyaml>=6.0.0",
     "pycryptodome>=3.20.0",
+    "pyrasite>=2.0",
 ]
 
 [project.scripts]
@@ -37,6 +38,11 @@ qemu-compose = "qemu_compose.main:cli"
 environments = [
     "sys_platform == 'darwin'",
     "sys_platform == 'linux'",
+]
+
+[tool.uv.workspace]
+members = [
+    "pyrasite",
 ]
 
 [build-system]
