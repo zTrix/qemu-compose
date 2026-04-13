@@ -343,15 +343,27 @@ epilog="""Commands:
             help="Instance ID, unique prefix, or assigned name",
         )
         down_parser.add_argument(
-            "-f", "--force",
+            "-f", "--file",
+            type=str,
+            required=False,
+            help="Compose configuration file to parse for instance name",
+        )
+        down_parser.add_argument(
+            "--force",
             action="store_true",
             default=False,
             help="Force removal without confirmation",
         )
         down_args = down_parser.parse_args(rest)
 
+        config_path = None
+        if down_args.file:
+            config_path = down_args.file
+        else:
+            config_path = guess_conf_path(None)
+
         from .cmd.down_command import command_down
-        sys.exit(command_down(identifier=down_args.identifier, force=down_args.force))
+        sys.exit(command_down(identifier=down_args.identifier, force=down_args.force, config_path=config_path))
     else:
         parser.print_help()
         sys.exit(1)

@@ -65,3 +65,35 @@ $ qemu-compose ssh <vmid> root@vsock%<cid> uname -a
 Notes:
 - The instance key is generated at first boot and stored under `~/.local/share/qemu-compose/instance/<vmid>/ssh-key`.
 - Any ssh options you pass will be forwarded; the last-specified option wins.
+
+## Down Command
+
+Stop and remove a VM instance.
+
+```
+$ qemu-compose down [identifier] [options]
+```
+
+Options:
+- `identifier`: Instance ID, unique prefix, or assigned name (optional if config file exists)
+- `-f, --file FILE`: Compose configuration file to parse for instance name
+- `--force`: Force removal without confirmation
+
+Examples:
+
+```
+# Stop and remove instance by name
+$ qemu-compose down my-vm
+
+# Use config file to auto-detect instance name
+$ cd ./script/ubuntu-cloudimg__amd64/
+$ qemu-compose down
+
+# Use specified config file
+$ qemu-compose down -f /path/to/qemu-compose.yml
+
+# Force removal
+$ qemu-compose down --force my-vm
+```
+
+Note: If no identifier is provided, qemu-compose will look for `qemu-compose.yml` or `qemu-compose.yaml` in the current directory and use the `name` field as the instance identifier.

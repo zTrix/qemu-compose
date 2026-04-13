@@ -61,7 +61,7 @@ def _is_pid_running(pid: Optional[int]) -> bool:
         return False
 
 
-def command_down(*, identifier: Optional[str] = None, force: bool = False) -> int:
+def command_down(*, identifier: Optional[str] = None, force: bool = False, config_path: Optional[str] = None) -> int:
     store = LocalStore()
     instance_root = store.instance_root
 
@@ -77,6 +77,14 @@ def command_down(*, identifier: Optional[str] = None, force: bool = False) -> in
 
     if identifier:
         vmid, candidates = _resolve_identifier(identifier, ids, name_index)
+    elif config_path:
+        from qemu_compose.instance.qemu_runner import QemuConfig
+        config = QemuConfig.load_yaml(config_path)
+        if config.name:
+            vmid, candidates = _resolve_identifier(config.name, ids, name_index)
+        else:
+            print("Error: config file does not specify a name", file=sys.stderr)
+            return 1
     else:
         print("Error: identifier is required", file=sys.stderr)
         return 1
