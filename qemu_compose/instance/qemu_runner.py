@@ -490,37 +490,28 @@ class QemuRunner(QEMUMachine):
             if read_only:
                 cmd.append('--readonly')
             try:
+                log_path = os.path.splitext(socket_path)[0] + '.log'
                 logger.info("running virtiofsd %s" % (" ".join(shlex.quote(p) for p in cmd), ))
-                proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                logger.info("virtiofsd log path: %s", log_path)
+                with open(log_path, 'ab', buffering=0) as log_fp:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdin=subprocess.PIPE,
+                        stdout=log_fp,
+                        stderr=subprocess.STDOUT,
+                    )
                 # proc = subprocess.Popen(["/usr/bin/tail", "-f", "/dev/null"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 return proc
             except Exception as e:
                 logger.warning("failed to start virtiofsd for %s: %s", shared_dir, e)
                 return None
 
-        def drain_proc_output(proc: subprocess.Popen):
-            for s in (proc.stdout, proc.stderr):
-                if s is None:
-                    continue
-                if not s.readable():
-                    continue
-
-                os.set_blocking(s.fileno(), False)
-                try:
-                    line:bytes = s.read(1024)
-                    if line:
-                        logger.debug("virtiofsd: %s", line.decode('utf-8', errors='replace').rstrip())
-                except Exception:
-                    pass
-
         def wait_for_socket(proc: subprocess.Popen, path: str, timeout_sec: float = 3.0, interval_sec: float = 0.05) -> bool:
             deadline = time.time() + timeout_sec
-            drain_proc_output(proc)
             while time.time() < deadline:
                 if os.path.exists(path):
                     return True
                 time.sleep(interval_sec)
-                drain_proc_output(proc)
             return os.path.exists(path)
 
         if self.config.network is None or self.config.network.lower() == 'user':
@@ -587,12 +578,12 @@ class QemuRunner(QEMUMachine):
             fstab_entries.append(f"{tag} {dst} virtiofs defaults{ro_suffix} 0 0")
 
         if fstab_entries:
-            # Force use of memory sharing with virtiofsd
-            # see https://github.com/virtio-win/kvm-guest-drivers-windows/wiki/Virtiofs:-Shared-file-system
-
+            # Force use of a shareable guest RAM backend with virtiofsd.
+            # Use memfd instead of /dev/shm-backed files so the VM is not capped
+            # by the tmpfs mount size of /dev/shm.
             args.extend([
                 "-object",
-                "memory-backend-file,id=qc-mem,size=%s,mem-path=/dev/shm,share=on" % vm_mem_size,
+                "memory-backend-memfd,id=qc-mem,size=%s,share=on" % vm_mem_size,
                 "-numa",
                 "node,memdev=qc-mem",
             ])
