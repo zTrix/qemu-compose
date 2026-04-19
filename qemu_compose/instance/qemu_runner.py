@@ -587,12 +587,12 @@ class QemuRunner(QEMUMachine):
             fstab_entries.append(f"{tag} {dst} virtiofs defaults{ro_suffix} 0 0")
 
         if fstab_entries:
-            # Force use of memory sharing with virtiofsd
-            # see https://github.com/virtio-win/kvm-guest-drivers-windows/wiki/Virtiofs:-Shared-file-system
-
+            # Force use of a shareable guest RAM backend with virtiofsd.
+            # Use memfd instead of /dev/shm-backed files so the VM is not capped
+            # by the tmpfs mount size of /dev/shm.
             args.extend([
                 "-object",
-                "memory-backend-file,id=qc-mem,size=%s,mem-path=/dev/shm,share=on" % vm_mem_size,
+                "memory-backend-memfd,id=qc-mem,size=%s,share=on" % vm_mem_size,
                 "-numa",
                 "node,memdev=qc-mem",
             ])
