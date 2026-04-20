@@ -3,13 +3,19 @@ env:
   base_image: "noble-server-cloudimg-amd64.img"
   temp_image: "test_ubuntu_cloudimg.qcow2"
   http_port: 8888
+  image_url: "https://cloud-images.ubuntu.com/noble/20250626/noble-server-cloudimg-amd64.img"
+  expected_size: "614020608"
+  expected_hash: "bd3be1d51997ea4ecf4905b3c3721763456b10d1a8dd987b8f1e4bed0d4c0514"
 before_script:
-  - curl -C - https://cloud-images.ubuntu.com/noble/20250626/noble-server-cloudimg-amd64.img -O
-  - mkdir -p http
-  - printf '#cloud-config\npassword\x3a _\nchpasswd\x3a\n  expire\x3a False\n\n' > http/user-data
-  - printf 'instance-id\x3a ubuntu/test\n' > http/meta-data
-  - touch http/vendor-data
-  - qemu-img create -b {base_image} -f qcow2 -F qcow2 {temp_image}
+  - DOWNLOAD {image_url} {base_image} {expected_size}
+  - VERIFY {base_image} {expected_size} sha256:{expected_hash}
+  - SHELL mkdir -p http
+  - SHELL printf '#cloud-config\npassword\x3a _\nchpasswd\x3a\n  expire\x3a False\n\n' > http/user-data
+  - SHELL printf 'instance-id\x3a ubuntu/test\n' > http/meta-data
+  - SHELL touch http/vendor-data
+  - echo "Creating QCOW2 image..."
+  - SHELL qemu-img create -b {base_image} -f qcow2 -F qcow2 {temp_image}
+  - echo "Setup completed successfully!"
 http_serve:
   listen: 0.0.0.0
   access_ip: '{GATEWAY_IP}'
@@ -35,6 +41,8 @@ boot_commands:
   - write: "cloud-init status --wait\r"
   - interact: null
 after_script:
-  - reset -I
-  - ls -l {temp_image}
-  - bash -c 'read -p "delete temp image file {temp_image}(Y/n)?" choice; case "$choice" in y|Y ) echo "deleting {temp_image}"; rm {temp_image} ;; n|N ) echo "will keep {temp_image}";; * ) echo "invalid choice, do nothing";; esac'
+  - SHELL reset -I
+  - SHELL ls -la {temp_image}
+  - echo "VM session ended. Cleaning up..."
+  - SHELL bash -c 'read -p "delete temp image file {temp_image}(Y/n)?" choice; case "$choice" in y|Y ) echo "deleting {temp_image}"; rm {temp_image} ;; n|N ) echo "will keep {temp_image}";; * ) echo "invalid choice, do nothing";; esac'
+  - echo "Cleanup completed!"
