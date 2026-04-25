@@ -1,5 +1,6 @@
 
 import os
+from typing import Set
 
 class LocalStore:
     def __init__(self, name="qemu-compose"):
@@ -28,3 +29,21 @@ class LocalStore:
         path = os.path.join(self.instance_root, vmid)
         os.makedirs(path, exist_ok=True)
         return path
+
+    def get_allocated_cids(self) -> Set[int]:
+        """获取所有已分配的 CID（从所有 instance 的 cid 文件中读取）"""
+        allocated = set()
+        try:
+            for instance_id in os.listdir(self.instance_root):
+                cid_path = os.path.join(self.instance_root, instance_id, "cid")
+                try:
+                    with open(cid_path, "r") as f:
+                        cid_str = f.read().strip()
+                        if cid_str:
+                            allocated.add(int(cid_str))
+                except (FileNotFoundError, ValueError, IOError):
+                    # 忽略没有 cid 文件或 cid 无效的 instance
+                    pass
+        except FileNotFoundError:
+            pass
+        return allocated
