@@ -3,6 +3,7 @@ from typing import List, Optional
 import os
 import shlex
 import sys
+import argparse
 import yaml
 import logging
 
@@ -75,7 +76,7 @@ def cli():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Define and run QEMU VM with qemu",
         usage="qemu-compose [OPTIONS] COMMAND",
-epilog="""Commands:
+ epilog="""Commands:
   up          Create and start QEMU vm
   ssh         Run ssh with instance key
   ps          List VM instances
@@ -84,13 +85,30 @@ epilog="""Commands:
   run         Create and run a new VM from an image
   start       Start an existing VM instance by ID or name
   down        Stop and remove a VM instance
+  tag         Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE
  """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
     parser.add_argument("--short", action="store_true", default=False, help="Shows only qemu-compose's version number")
     parser.add_argument('command', type=str, nargs='?', help='command to run')
+    
+    # Check for subcommand help before parse_known_args
+    help_flag = None
+    if '--help' in sys.argv:
+        help_flag = '--help'
+    elif '-h' in sys.argv:
+        help_flag = '-h'
+    
+    if help_flag:
+        # Remove from sys.argv temporarily to let subcommand parser handle it
+        sys.argv.remove(help_flag)
+    
     # Parse only known top-level args, leave subcommand options for later
     args, rest = parser.parse_known_args()
+    
+    # Restore help flag for subcommand parser
+    if help_flag:
+        rest.append(help_flag)
 
     if args.command == "version" or (args.version and not args.command):
         version(short=args.short)
@@ -364,6 +382,27 @@ epilog="""Commands:
 
         from .cmd.down_command import command_down
         sys.exit(command_down(identifier=down_args.identifier, force=down_args.force, config_path=config_path))
+    elif args.command == "tag":
+        import argparse as _argparse
+        tag_parser = _argparse.ArgumentParser(
+            prog="qemu-compose tag",
+            add_help=True,
+            description="Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE",
+        )
+        tag_parser.add_argument(
+            "source_image",
+            type=str,
+            help="Source image identifier (ID or name[:tag])",
+        )
+        tag_parser.add_argument(
+            "target_image",
+            type=str,
+            help="Target image name[:tag]",
+        )
+        tag_args = tag_parser.parse_args(rest)
+
+        from .cmd.tag_command import command_tag
+        sys.exit(command_tag(source_image=tag_args.source_image, target_image=tag_args.target_image))
     else:
         parser.print_help()
         sys.exit(1)
