@@ -203,7 +203,32 @@ class QemuRunner(QEMUMachine):
             # Read name if present
             self.vm_name = safe_read(os.path.join(root, self.vmid, "name"))
 
-        self.cid = get_available_guest_cid(1000, self.store.get_allocated_cids())
+        # 获取已分配的 CID 列表（用于避免冲突）
+        allocated_cids = self.store.get_allocated_cids()
+        
+        # 如果是重启已有 instance，尝试复用原来的 CID
+        self.cid = None
+        if self.config.instance is not None:
+            existing_cid_path = os.path.join(self.store.instance_dir(self.vmid), "cid")
+            try:
+                with open(existing_cid_path, "r") as f:
+                    existing_cid_str = f.read().strip()
+                    if existing_cid_str:
+                        existing_cid = int(existing_cid_str)
+                        # 尝试复用这个 CID，从它开始查找
+                        self.cid = get_available_guest_cid(existing_cid, allocated_cids - {existing_cid})
+                        # 如果找到的 CID 不是原来的，说明原来的被系统占用了
+                        if self.cid != existing_cid:
+                            logger.info("existing CID %d is in use by system, allocating new CID %d", 
+                                      existing_cid, self.cid)
+            except (FileNotFoundError, ValueError, IOError):
+                # cid 文件不存在或无效，使用普通分配流程
+                pass
+        
+        # 如果是新 instance 或复用失败，使用普通分配流程
+        if self.cid is None:
+            self.cid = get_available_guest_cid(1000, allocated_cids)
+        
         if self.cid is None:
             print("no available guest cid found, please make sure vhost_vsock module loaded", file=sys.stderr)
             return 124
