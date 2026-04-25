@@ -203,7 +203,7 @@ class QemuRunner(QEMUMachine):
             # Read name if present
             self.vm_name = safe_read(os.path.join(root, self.vmid, "name"))
 
-        self.cid = get_available_guest_cid(1000)
+        self.cid = get_available_guest_cid(1000, self.store.get_allocated_cids())
         if self.cid is None:
             print("no available guest cid found, please make sure vhost_vsock module loaded", file=sys.stderr)
             return 124

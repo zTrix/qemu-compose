@@ -11,11 +11,12 @@ VHOST_VSOCK_SET_GUEST_CID = 0x4008AF60
 VSOCK_PATH = '/dev/vhost-vsock'
 
 
-def get_available_guest_cid(start_guest_cid: int = 1000) -> None | int:
+def get_available_guest_cid(start_guest_cid: int = 1000, allocated_cids=None) -> None | int:
     """
     get available guest cid
 
-    :param guest_cid: start_guest_cid
+    :param start_guest_cid: start guest cid
+    :param allocated_cids: set of already allocated CIDs to avoid reusing
     :return: available guest cid if success, else None
     """
     try:
@@ -30,6 +31,10 @@ def get_available_guest_cid(start_guest_cid: int = 1000) -> None | int:
     guest_cid = start_guest_cid
     try:
         while guest_cid <= 0xFFFFFFFF:  # U32_MAX
+            if allocated_cids is not None and guest_cid in allocated_cids:
+                guest_cid += 1
+                continue
+                
             cid_c = struct.pack('L', guest_cid)
             try:
                 fcntl.ioctl(vsock_fd, VHOST_VSOCK_SET_GUEST_CID, cid_c)
