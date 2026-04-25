@@ -97,3 +97,39 @@ $ qemu-compose down --force my-vm
 ```
 
 Note: If no identifier is provided, qemu-compose will look for `qemu-compose.yml` or `qemu-compose.yaml` in the current directory and use the `name` field as the instance identifier.
+
+## Tag Command
+
+Create a tag that refers to an image, similar to `docker tag`.
+
+```
+$ qemu-compose tag SOURCE_IMAGE[:TAG] TARGET_IMAGE[:TAG]
+```
+
+- `SOURCE_IMAGE[:TAG]`: Source image identifier (can be image ID, name, or name:tag)
+- `TARGET_IMAGE[:TAG]`: Target image name and optional tag (defaults to `latest` if not specified)
+
+Behavior:
+- If the target tag already exists on another image, it will be moved to the source image
+- Tags are stored in the image's `manifest.json` file under the `repo_tags` field
+
+Examples:
+
+```
+# Tag an image by ID
+$ qemu-compose tag 94a0434d0f73 devbox:archlinux
+
+# Tag an image by name
+$ qemu-compose tag my-image:v1 my-image:latest
+
+# Create a new tag for an existing image
+$ qemu-compose tag ubuntu:20.04 ubuntu:focal
+
+# Replace an existing tag (moves tag from one image to another)
+$ qemu-compose tag new-image:v1 existing-tag:latest
+```
+
+Notes:
+- Image IDs can be specified as full SHA256 digest or unique prefix
+- When a tag already exists on a different image, the tag is moved (not copied) to the new image
+- Use `qemu-compose images` to list all images and their tags
