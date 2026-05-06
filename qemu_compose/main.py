@@ -86,6 +86,7 @@ def cli():
   start       Start an existing VM instance by ID or name
   down        Stop and remove a VM instance
   tag         Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE
+  rmi         Remove an image tag or image by ID
  """,
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
@@ -403,6 +404,22 @@ def cli():
 
         from .cmd.tag_command import command_tag
         sys.exit(command_tag(source_image=tag_args.source_image, target_image=tag_args.target_image))
+    elif args.command == "rmi":
+        import argparse as _argparse
+        rmi_parser = _argparse.ArgumentParser(
+            prog="qemu-compose rmi",
+            add_help=True,
+            description="Remove an image tag or image by ID",
+        )
+        rmi_parser.add_argument(
+            "image",
+            type=str,
+            help="Image identifier (ID or name[:tag])",
+        )
+        rmi_args = rmi_parser.parse_args(rest)
+
+        from .cmd.rmi_command import command_rmi
+        sys.exit(command_rmi(image=rmi_args.image))
     else:
         parser.print_help()
         sys.exit(1)
