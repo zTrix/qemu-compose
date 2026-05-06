@@ -48,3 +48,11 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
   - 仓库当前未发现正式 `tests/` 测试套件。
   - 代码风格配置使用 `ruff.toml`，lint 选择规则为 `E4`、`E7`、`E9`、`F`。
   - README 建议通过 `script/ubuntu-cloudimg__amd64/` 示例运行 `qemu-compose up` 做烟测。
+
+[项目命令入口与测试现状]
+- Date: 2026-05-06
+- Context: Agent 在执行“增加 rmi 命令”时发现
+- Category: 代码结构
+- Instructions:
+  - CLI 子命令统一在 `qemu_compose/main.py` 中通过 `args.command` 分发到 `qemu_compose/cmd/` 下的模块。
+  - 当前仓库尚未包含 `tests/` 目录，需要新增 `pytest` 风格单元测试文件承载新命令行为测试。
