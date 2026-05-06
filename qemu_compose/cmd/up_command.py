@@ -14,15 +14,6 @@ from qemu_compose.qemu.machine.machine import AbnormalShutdown
 logger = logging.getLogger("qemu-compose.cmd.up_command")
 
 
-def guess_conf_path(path: Optional[str]) -> Optional[str]:
-    if path:
-        return path
-    for candidate in ["qemu-compose.yml", "qemu-compose.yaml"]:
-        if os.path.exists(candidate):
-            return candidate
-    return None
-
-
 def command_up(*, config_path: str, project_directory: Optional[str] = None) -> int:
     store = LocalStore()
     cwd = os.path.normpath(os.path.abspath(os.path.dirname(config_path)))
