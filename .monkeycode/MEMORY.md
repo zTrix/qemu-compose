@@ -31,6 +31,24 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 
 ## 条目
 
+[qemu-compose 核心架构]
+- Date: 2026-04-30
+- Context: Agent 在执行仓库分析和功能规划时发现
+- Category: 代码结构
+- Instructions:
+  - 项目是 Python CLI，入口为 `qemu_compose.main:cli`，包脚本名为 `qemu-compose`。
+  - CLI 子命令主要在 `qemu_compose/cmd/`，实例生命周期核心在 `qemu_compose/instance/qemu_runner.py`。
+  - 本地状态存放在 `~/.local/share/qemu-compose/` 下的 `image/` 和 `instance/` 目录，由 `LocalStore` 统一管理。
+
+[qemu-compose 验证方式]
+- Date: 2026-04-30
+- Context: Agent 在执行仓库分析和功能规划时发现
+- Category: 测试方法
+- Instructions:
+  - 仓库当前未发现正式 `tests/` 测试套件。
+  - 代码风格配置使用 `ruff.toml`，lint 选择规则为 `E4`、`E7`、`E9`、`F`。
+  - README 建议通过 `script/ubuntu-cloudimg__amd64/` 示例运行 `qemu-compose up` 做烟测。
+
 [项目命令入口与测试现状]
 - Date: 2026-05-06
 - Context: Agent 在执行“增加 rmi 命令”时发现

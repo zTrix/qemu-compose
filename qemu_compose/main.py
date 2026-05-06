@@ -1,59 +1,8 @@
 #!/usr/bin/env python3
-from typing import List, Optional
+
 import os
-import shlex
 import sys
 import argparse
-import yaml
-import logging
-
-from .qemu.machine.machine import AbnormalShutdown
-from .local_store import LocalStore
-from .instance.qemu_runner import QemuConfig, QemuRunner
-
-
-logger = logging.getLogger("qemu-compose")
-
-def run(config_path, env_update=None):
-    store = LocalStore()
-    cwd = os.path.normpath(os.path.abspath(os.path.dirname(config_path)))
-
-    config_obj: dict
-    with open(config_path) as f:
-        config_obj = yaml.safe_load(f)
-
-    config = QemuConfig.from_dict(config_obj)
-    vm = QemuRunner(config, store, cwd)
-
-    if (exit_code := vm.check_and_lock()) > 0:
-        return exit_code
-
-    config.save_to(vm.instance_dir)
-
-    vm.prepare_env(env_update=env_update)
-
-    if (exit_code := vm.prepare_storage()) > 0:
-        return exit_code
-
-    vm.execute_script('before_script')
-    vm.setup_qemu_args()
-
-    try:
-        vm.start()
-        vm.interact()
-        vm.execute_script('after_script')
-    except KeyboardInterrupt:
-        logger.warning("Keyboard interrupt, shutting down vm...")
-    finally:
-        try:
-            if vm is not None and vm.is_running():
-                vm.shutdown(hard=True)
-        except AbnormalShutdown:
-            logger.error('abnormal shutdown exception')
-        finally:
-            if vm is not None:
-                vm.cleanup()
-    return 0
 
 def guess_conf_path(p:str | None):
     if p:
@@ -120,7 +69,6 @@ def cli():
         sys.exit(1)
     elif args.command == "up":
         import argparse as _argparse
-        # Sub-parser for `up` options to keep scope minimal
         sub_parser = _argparse.ArgumentParser(
             prog="qemu-compose up",
             add_help=True,
@@ -136,82 +84,19 @@ def cli():
             type=str,
             help="Specify an alternate working directory (default: the path of the Compose file)",
         )
-        # Parse only the args following the "ps" command
         sub_args = sub_parser.parse_args(rest)
-
-        env_update = None
-        if sub_args.project_directory:
-            env_update = {"CWD": sub_args.project_directory}
 
         conf_path = guess_conf_path(sub_args.file)
         if not conf_path:
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
-        sys.exit(run(conf_path, env_update=env_update))
+
+        from .cmd.up_command import command_up
+
+        sys.exit(command_up(config_path=conf_path, project_directory=sub_args.project_directory))
     elif args.command == "ssh":
         import argparse as _argparse
 
-        # Functional helpers scoped to ssh subcommand for clarity.
-        def read_text(path: str) -> Optional[str]:
-            try:
-                with open(path, "r") as f:
-                    return f.read().strip()
-            except Exception:
-                return None
-
-        def build_name_index(root: str) -> dict[str, str]:
-            # Map VM name -> VMID for all instances having a name file.
-            def name_of(vmid: str) -> Optional[str]:
-                return read_text(os.path.join(root, vmid, "name"))
-
-            def collect() -> List[tuple[str, Optional[str]]]:
-                return [
-                    (d, name_of(d))
-                    for d in os.listdir(root)
-                    if os.path.isdir(os.path.join(root, d))
-                ]
-
-            return {name: vmid for (vmid, name) in collect() if name}
-
-        def list_vmids(root: str) -> List[str]:
-            return [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
-
-        def resolve_identifier_with_prefix(
-            ident: str,
-            ids: List[str],
-            name_index: dict[str, str],
-        ) -> tuple[Optional[str], List[str]]:
-            # Exact matches take precedence
-            if ident in ids:
-                return ident, [ident]
-            if ident in name_index:
-                return name_index[ident], [name_index[ident]]
-
-            id_matches = [i for i in ids if i.startswith(ident)]
-            candidates = id_matches
-
-            if len(candidates) == 1:
-                return candidates[0], candidates
-            return None, candidates
-
-        def build_ssh_cmd(root: str, vmid: str, passthrough: List[str]) -> tuple[List[str], Optional[str]]:
-            key_path = os.path.join(root, vmid, "ssh-key")
-            cid_path = os.path.join(root, vmid, "cid")
-            cid_val = read_text(cid_path)
-
-            base: List[str] = [
-                "ssh",
-                "-S", "none",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-i", key_path,
-            ]
-
-            destination = f"root@vsock%{cid_val}" if cid_val else "root@vsock%${cid}"
-            cmd = base + [destination] + passthrough
-            return cmd, cid_val
-
-        # Sub-parser for `ssh` to parse identifier and passthrough command from `rest`
         ssh_parser = _argparse.ArgumentParser(
             prog="qemu-compose ssh",
             add_help=True,
@@ -230,44 +115,9 @@ def cli():
 
         ssh_args = ssh_parser.parse_args(rest)
 
-        store = LocalStore()
-        instance_root = store.instance_root
+        from .cmd.ssh_command import command_ssh
 
-        name_index = build_name_index(instance_root)
-        ids = list_vmids(instance_root)
-        vmid, candidates = resolve_identifier_with_prefix(ssh_args.identifier, ids, name_index)
-
-        if vmid is None and not candidates:
-            print("Error: no VMID or NAME matches the given prefix.", file=sys.stderr)
-            sys.exit(1)
-
-        if vmid is None and candidates:
-            preview = ", ".join(sorted(candidates)[:8])
-            more = "" if len(candidates) <= 8 else f" ... and {len(candidates)-8} more"
-            print(f"Error: identifier '{ssh_args.identifier}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
-            sys.exit(1)
-
-        key_path = os.path.join(instance_root, vmid, "ssh-key")
-        if not os.path.exists(key_path):
-            print("Error: instance key not found: %s" % key_path, file=sys.stderr)
-            sys.exit(1)
-
-        passthrough = ssh_args.command or []
-        ssh_cmd, cid_val = build_ssh_cmd(instance_root, vmid, passthrough)
-
-        if not cid_val:
-            printable = " ".join(shlex.quote(p) for p in ssh_cmd)
-            print(printable)
-            sys.exit(0)
-
-        try:
-            os.execvp(ssh_cmd[0], ssh_cmd)
-        except FileNotFoundError:
-            print("Error: 'ssh' binary not found in PATH", file=sys.stderr)
-            sys.exit(127)
-        except OSError as e:
-            print(f"Error executing ssh: {e}", file=sys.stderr)
-            sys.exit(1)
+        sys.exit(command_ssh(identifier=ssh_args.identifier, passthrough=ssh_args.command))
     elif args.command == "ps":
         import argparse as _argparse
         # Sub-parser for `ps` options to keep scope minimal
