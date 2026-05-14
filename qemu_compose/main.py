@@ -105,6 +105,7 @@ def cli():
         ssh_parser.add_argument(
             "identifier",
             type=str,
+            nargs='?',
             help="Instance ID, unique prefix, or assigned name",
         )
         ssh_parser.add_argument(
@@ -117,7 +118,8 @@ def cli():
 
         from .cmd.ssh_command import command_ssh
 
-        sys.exit(command_ssh(identifier=ssh_args.identifier, passthrough=ssh_args.command))
+        config_path = guess_conf_path(None)
+        sys.exit(command_ssh(identifier=ssh_args.identifier, passthrough=ssh_args.command, config_path=config_path))
     elif args.command == "ps":
         import argparse as _argparse
         # Sub-parser for `ps` options to keep scope minimal
