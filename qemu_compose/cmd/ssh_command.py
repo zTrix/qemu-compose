@@ -65,13 +65,35 @@ def _build_ssh_cmd(root: str, vmid: str, passthrough: List[str]) -> tuple[List[s
     return base + [destination] + passthrough, cid_val
 
 
-def command_ssh(*, identifier: str, passthrough: Optional[List[str]] = None) -> int:
+def command_ssh(*, identifier: Optional[str] = None, passthrough: Optional[List[str]] = None, config_path: Optional[str] = None) -> int:
     store = LocalStore()
     instance_root = store.instance_root
 
     name_index = _build_name_index(instance_root)
     ids = _list_vmids(instance_root)
-    vmid, candidates = _resolve_identifier_with_prefix(identifier, ids, name_index)
+
+    vmid = None
+    candidates = []
+
+    if identifier:
+        vmid, candidates = _resolve_identifier_with_prefix(identifier, ids, name_index)
+    elif config_path:
+        import yaml
+        try:
+            with open(config_path) as f:
+                config_obj = yaml.safe_load(f)
+            config_name = config_obj.get("name") if config_obj else None
+            if config_name:
+                vmid, candidates = _resolve_identifier_with_prefix(config_name, ids, name_index)
+            else:
+                print("Error: config file does not specify a name", file=sys.stderr)
+                return 1
+        except Exception as e:
+            print(f"Error: failed to read config file: {e}", file=sys.stderr)
+            return 1
+    else:
+        print("Error: identifier is required", file=sys.stderr)
+        return 1
 
     if vmid is None and not candidates:
         print("Error: no VMID or NAME matches the given prefix.", file=sys.stderr)
