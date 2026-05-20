@@ -56,3 +56,11 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 - Instructions:
   - CLI 子命令统一在 `qemu_compose/main.py` 中通过 `args.command` 分发到 `qemu_compose/cmd/` 下的模块。
   - 当前仓库尚未包含 `tests/` 目录，需要新增 `pytest` 风格单元测试文件承载新命令行为测试。
+
+[qemu-compose 测试执行方式]
+- Date: 2026-05-20
+- Context: Agent 在执行“instance 创建时记录 image-id 信息”时发现
+- Category: 测试方法
+- Instructions:
+  - 当前环境使用 `python3 -m pytest` 运行测试。
+  - 如缺少测试依赖，可先执行 `pip3 install --break-system-packages pytest`。

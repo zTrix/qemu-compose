@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple
 
+from qemu_compose.image import load_image_by_id
 from qemu_compose.local_store import LocalStore
 from qemu_compose.utils import safe_read
 
@@ -12,6 +13,7 @@ class InstanceMeta:
     instance_id: str
     name: Optional[str]
     image: Optional[str]
+    image_id: Optional[str]
     cid: Optional[int]
     pid: Optional[int]
 
@@ -47,9 +49,10 @@ def _read_instance_meta(store: LocalStore, instance_id: str) -> InstanceMeta:
     base = os.path.join(store.instance_root, instance_id)
     name = safe_read(os.path.join(base, "name"))
     image = safe_read(os.path.join(base, "image"))
+    image_id = safe_read(os.path.join(base, "image-id"))
     cid = _to_int(safe_read(os.path.join(base, "cid")))
     pid = _to_int(safe_read(os.path.join(base, "qemu.pid")))
-    return InstanceMeta(instance_id=instance_id, name=name, image=image, cid=cid, pid=pid)
+    return InstanceMeta(instance_id=instance_id, name=name, image=image, image_id=image_id, cid=cid, pid=pid)
 
 
 def _collect_instances(store: LocalStore) -> List[InstanceMeta]:
@@ -62,6 +65,15 @@ def _filter_instances(instances: Iterable[InstanceMeta], show_all: bool) -> List
 
 def _truncate_instance_id(iid: str, length: int = 12) -> str:
     return iid[:length]
+
+
+def _resolve_image_display(store: LocalStore, meta: InstanceMeta) -> str:
+    if meta.image_id:
+        manifest = load_image_by_id(store.image_root, meta.image_id)
+        if manifest is not None and meta.image and manifest.has_repo_tag(meta.image):
+            return meta.image
+        return _truncate_instance_id(meta.image_id)
+    return meta.image or "-"
 
 
 def _column_specs(name_w: int, image_w: int) -> Tuple[int, int, int, int, int]:
@@ -83,7 +95,7 @@ def _format_header(name_w: int, image_w: int) -> str:
 def _format_row(meta: InstanceMeta, name_w: int, image_w: int) -> str:
     status = "running" if _is_pid_running(meta.pid) else "exited"
     name = meta.name or "-"
-    image = meta.image or "-"
+    image = _resolve_image_display(LocalStore(), meta)
     cid = "-" if meta.cid is None else str(meta.cid)
     pid = "-" if meta.pid is None else str(meta.pid)
     id_w, name_w, image_w, cid_w, pid_w = _column_specs(name_w, image_w)
@@ -107,7 +119,8 @@ def _compute_name_width(instances: Iterable[InstanceMeta]) -> int:
 
 
 def _compute_image_width(instances: Iterable[InstanceMeta]) -> int:
-    images = [m.image or "-" for m in instances]
+    store = LocalStore()
+    images = [_resolve_image_display(store, m) for m in instances]
     longest = max((len(i) for i in images), default=0)
     return max(len("IMAGE"), longest)
 

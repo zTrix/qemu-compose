@@ -657,6 +657,8 @@ class QemuRunner(QEMUMachine):
                 f.write(str(self.vm_name) if self.vm_name is not None else "")
             with open(os.path.join(self.instance_dir, "image"), "w") as f:
                 f.write(str(self.config.image) if self.config.image is not None else "")
+            with open(os.path.join(self.instance_dir, "image-id"), "w") as f:
+                f.write(str(self.image_manifest.id) if self.image_manifest is not None else "")
             with open(os.path.join(self.instance_dir, "instance-id"), "w") as f:
                 f.write(str(self.vmid))
         except Exception as e:
