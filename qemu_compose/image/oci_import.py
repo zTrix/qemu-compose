@@ -28,12 +28,8 @@ def require_tools(tools: List[str]) -> None:
 
 
 def run_cmd(cmd: List[str], *, env: Optional[Dict[str, str]] = None) -> None:
-    res = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    res = subprocess.run(cmd, text=True, env=env)
     if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, file=sys.stderr, end="")
-        if res.stderr:
-            print(res.stderr, file=sys.stderr, end="")
         raise OciImportError("command failed: " + " ".join(cmd))
 
 
@@ -331,9 +327,12 @@ def make_rootfs_tar(rootfs: Path, tar_path: Path) -> None:
 def build_qcow2(rootfs: Path, disk_path: Path, disk_size: str) -> None:
     require_tools(["qemu-img", "guestfish"])
     rootfs_tar = disk_path.with_suffix(".rootfs.tar")
+    print(f"Packing root filesystem: {rootfs_tar}", flush=True)
     make_rootfs_tar(rootfs, rootfs_tar)
     try:
+        print(f"Creating qcow2 disk: {disk_path} ({disk_size})", flush=True)
         run_cmd(["qemu-img", "create", "-f", "qcow2", str(disk_path), disk_size])
+        print("Copying root filesystem into qcow2 disk", flush=True)
         run_cmd(
             [
                 "guestfish",
@@ -406,6 +405,7 @@ def pull_oci_image(image: str, oci_dir: Path, digest_file: Path, platform: str) 
         "docker://" + image,
         "oci:" + str(oci_dir) + ":latest",
     ]
+    print(f"Pulling OCI image: {image} ({platform})", flush=True)
     run_cmd(cmd)
     return parse_digest(digest_file.read_text())
 
@@ -415,6 +415,7 @@ def unpack_oci_image(oci_dir: Path, bundle_dir: Path) -> None:
     if os.geteuid() != 0:
         cmd.append("--rootless")
     cmd.extend(["--image", str(oci_dir) + ":latest", str(bundle_dir)])
+    print("Unpacking OCI image root filesystem", flush=True)
     run_cmd(cmd)
 
 
