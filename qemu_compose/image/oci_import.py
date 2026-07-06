@@ -236,6 +236,82 @@ DHCP=yes
         link_path.symlink_to("/usr/lib/systemd/system/serial-getty@.service")
 
 
+def set_root_password_hash(rootfs: Path, password_hash: str, *, allow_empty_password: bool = False) -> None:
+    shadow_path = rootfs / "etc" / "shadow"
+    if not shadow_path.exists():
+        raise OciImportError("root password requested, but /etc/shadow was not found in the image")
+
+    lines = shadow_path.read_text().splitlines()
+    updated = False
+    for idx, line in enumerate(lines):
+        if not line.startswith("root:"):
+            continue
+        parts = line.split(":")
+        if len(parts) < 2:
+            raise OciImportError("root password requested, but root shadow entry is malformed")
+        parts[1] = password_hash
+        lines[idx] = ":".join(parts)
+        updated = True
+        break
+
+    if not updated:
+        raise OciImportError("root password requested, but root user was not found in /etc/shadow")
+
+    shadow_path.write_text("\n".join(lines) + "\n")
+    if allow_empty_password:
+        ensure_pam_nullok(rootfs)
+
+
+def set_root_empty_password(rootfs: Path) -> None:
+    set_root_password_hash(rootfs, "", allow_empty_password=True)
+
+
+def hash_root_password(password: str) -> str:
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        raise OciImportError("root password requested, but 'openssl' was not found in PATH")
+
+    res = subprocess.run(
+        [openssl, "passwd", "-6", "-stdin"],
+        input=password + "\n",
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if res.returncode != 0:
+        if res.stderr:
+            print(res.stderr, file=sys.stderr, end="")
+        raise OciImportError("failed to hash root password with openssl")
+    password_hash = res.stdout.strip()
+    if not password_hash:
+        raise OciImportError("failed to hash root password with openssl")
+    return password_hash
+
+
+def ensure_pam_nullok(rootfs: Path) -> None:
+    pam_dir = rootfs / "etc" / "pam.d"
+    if not pam_dir.is_dir():
+        return
+
+    for pam_file in pam_dir.iterdir():
+        if not pam_file.is_file():
+            continue
+        lines = pam_file.read_text().splitlines()
+        changed = False
+        new_lines = []
+        for line in lines:
+            stripped = line.lstrip()
+            if (
+                stripped.startswith("auth")
+                or stripped.startswith("-auth")
+            ) and "pam_unix.so" in line and "nullok" not in line.split("#", 1)[0].split():
+                line = line + " nullok"
+                changed = True
+            new_lines.append(line)
+        if changed:
+            pam_file.write_text("\n".join(new_lines) + "\n")
+
+
 def make_rootfs_tar(rootfs: Path, tar_path: Path) -> None:
     def normalize_owner(tar_info: tarfile.TarInfo) -> tarfile.TarInfo:
         # Rootless OCI unpack cannot chown files on the host. Normalize the
@@ -393,6 +469,8 @@ def import_oci_image(
     force: bool,
     keep_workdir: bool,
     boot_mode: str,
+    empty_root_password: bool,
+    root_password: Optional[str],
 ) -> str:
     if boot_mode not in BOOT_MODES:
         raise OciImportError(f"unsupported boot mode: {boot_mode}")
@@ -423,6 +501,10 @@ def import_oci_image(
             write_init(rootfs, metadata["config"])
         elif boot_mode == BOOT_SYSTEMD:
             configure_systemd_rootfs(rootfs)
+        if root_password is not None:
+            set_root_password_hash(rootfs, hash_root_password(root_password))
+        elif empty_root_password:
+            set_root_empty_password(rootfs)
 
         staged_dir = work_parent / "image"
         staged_dir.mkdir()

@@ -176,6 +176,17 @@ def cli():
             default="container",
             help="Boot mode for the generated image, default: container",
         )
+        password_group = pull_parser.add_mutually_exclusive_group()
+        password_group.add_argument(
+            "--empty-root-password",
+            action="store_true",
+            default=None,
+            help="Unlock root with an empty password for serial login (default)",
+        )
+        password_group.add_argument(
+            "--root-password",
+            help="Set root password for serial login instead of using an empty password",
+        )
         pull_parser.add_argument(
             "--force",
             action="store_true",
@@ -194,6 +205,9 @@ def cli():
             help="Docker/OCI image reference, for example alpine:3.20",
         )
         pull_args = pull_parser.parse_args(rest)
+        empty_root_password = pull_args.empty_root_password
+        if empty_root_password is None:
+            empty_root_password = pull_args.root_password is None
 
         from .cmd.pull_command import command_pull
         sys.exit(command_pull(
@@ -205,6 +219,8 @@ def cli():
             force=pull_args.force,
             keep_workdir=pull_args.keep_workdir,
             boot_mode=pull_args.boot,
+            empty_root_password=empty_root_password,
+            root_password=pull_args.root_password,
         ))
     elif args.command == "run":
         import argparse as _argparse

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import List
+from typing import List, Optional
 
 from qemu_compose.image.manifest import ImageManifest
 from qemu_compose.image.oci_import import OciImportError, import_oci_image, normalize_repo_tag
@@ -47,6 +47,8 @@ def command_pull(
     force: bool = False,
     keep_workdir: bool = False,
     boot_mode: str = "container",
+    empty_root_password: bool = True,
+    root_password: Optional[str] = None,
 ) -> int:
     store = LocalStore()
     repo_tag = normalize_repo_tag(image)
@@ -62,6 +64,8 @@ def command_pull(
             force=force,
             keep_workdir=keep_workdir,
             boot_mode=boot_mode,
+            empty_root_password=empty_root_password,
+            root_password=root_password,
         )
     except OciImportError as e:
         print(f"Error: {e}", file=sys.stderr)

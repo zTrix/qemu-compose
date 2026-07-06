@@ -12,9 +12,13 @@ from qemu_compose.image.oci_import import (
     BOOT_SYSTEMD,
     OciImportError,
     configure_systemd_rootfs,
+    ensure_pam_nullok,
+    hash_root_password,
     init_exec_line,
     make_rootfs_tar,
     normalize_repo_tag,
+    set_root_empty_password,
+    set_root_password_hash,
     unpack_oci_image,
     write_manifest as write_import_manifest,
 )
@@ -51,6 +55,8 @@ def test_pull_prints_imported_image(tmp_path, monkeypatch, capsys):
     image_id = "abc123def456"
 
     def fake_import(**kwargs):
+        assert kwargs["empty_root_password"] is True
+        assert kwargs["root_password"] is None
         image_dir = tmp_path / "qemu-compose" / "image" / image_id
         write_manifest(image_dir, image_id, ["alpine:3.20"])
         return image_id
@@ -232,3 +238,50 @@ def test_configure_systemd_rootfs_requires_systemd(tmp_path):
         assert "systemd boot requested" in str(e)
     else:
         raise AssertionError("expected OciImportError")
+
+
+def test_set_root_empty_password_unlocks_shadow_and_pam(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    shadow = rootfs / "etc" / "shadow"
+    shadow.parent.mkdir(parents=True)
+    shadow.write_text("root:!:20000:0:99999:7:::\nuser:x:20000:0:99999:7:::\n")
+    pam = rootfs / "etc" / "pam.d" / "system-auth"
+    pam.parent.mkdir(parents=True)
+    pam.write_text("auth       [success=1 default=bad]     pam_unix.so          try_first_pass\n")
+
+    set_root_empty_password(rootfs)
+
+    assert shadow.read_text().splitlines()[0] == "root::20000:0:99999:7:::"
+    assert "nullok" in pam.read_text()
+
+
+def test_ensure_pam_nullok_is_idempotent(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    pam = rootfs / "etc" / "pam.d" / "system-auth"
+    pam.parent.mkdir(parents=True)
+    pam.write_text("auth required pam_unix.so nullok\n")
+
+    ensure_pam_nullok(rootfs)
+
+    assert pam.read_text() == "auth required pam_unix.so nullok\n"
+
+
+def test_set_root_password_hash_updates_shadow_without_nullok(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    shadow = rootfs / "etc" / "shadow"
+    shadow.parent.mkdir(parents=True)
+    shadow.write_text("root:!:20000:0:99999:7:::\n")
+    pam = rootfs / "etc" / "pam.d" / "system-auth"
+    pam.parent.mkdir(parents=True)
+    pam.write_text("auth required pam_unix.so\n")
+
+    set_root_password_hash(rootfs, "$6$hash")
+
+    assert shadow.read_text().splitlines()[0] == "root:$6$hash:20000:0:99999:7:::"
+    assert pam.read_text() == "auth required pam_unix.so\n"
+
+
+def test_hash_root_password_generates_sha512_hash():
+    password_hash = hash_root_password("testpass")
+
+    assert password_hash.startswith("$6$")
