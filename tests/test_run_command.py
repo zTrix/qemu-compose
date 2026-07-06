@@ -79,8 +79,9 @@ def test_run_preserves_named_image_in_config(tmp_path, monkeypatch):
 
     monkeypatch.setattr("qemu_compose.cmd.run_command.QemuRunner", FakeRunner)
 
-    assert command_run(image_hint="repo:latest", name="vm1") == 0
+    assert command_run(image_hint="repo:latest", name="vm1", network="none") == 0
     assert configs[0].image == "repo:latest"
+    assert configs[0].network == "none"
 
 
 def test_run_expands_image_prefix_in_config(tmp_path, monkeypatch):

@@ -12,7 +12,14 @@ from qemu_compose.qemu.machine.machine import AbnormalShutdown
 
 logger = logging.getLogger("qemu-compose.cmd.run_command")
 
-def command_run(*, image_hint: str, name: Optional[str], publish: Optional[List[str]] = None, volumes: Optional[List[str]] = None) -> int:
+def command_run(
+    *,
+    image_hint: str,
+    name: Optional[str],
+    network: Optional[str] = None,
+    publish: Optional[List[str]] = None,
+    volumes: Optional[List[str]] = None,
+) -> int:
     store = LocalStore()
 
     matched_by_name = load_image_by_name(store.image_root, image_hint) is not None
@@ -31,7 +38,13 @@ def command_run(*, image_hint: str, name: Optional[str], publish: Optional[List[
     cwd = os.getcwd()
 
     config_image = image_hint if matched_by_name else resolved_id
-    config = QemuConfig(name=name, image=config_image, ports=list(publish or []), volumes=list(volumes or []))
+    config = QemuConfig(
+        name=name,
+        image=config_image,
+        network=network,
+        ports=list(publish or []),
+        volumes=list(volumes or []),
+    )
     vm = QemuRunner(config, store, cwd)
 
     if (exit_code := vm.check_and_lock()) > 0:

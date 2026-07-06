@@ -286,6 +286,11 @@ def cli():
             help="Bind-mount a host directory into the guest using virtiofs; format: src:dst[:ro]; repeatable",
         )
         run_parser.add_argument(
+            "--network",
+            choices=["user", "none"],
+            help="Network mode for the VM; default is user",
+        )
+        run_parser.add_argument(
             "image",
             type=str,
             help="Image identifier",
@@ -293,7 +298,13 @@ def cli():
         run_args = run_parser.parse_args(rest)
 
         from .cmd.run_command import command_run
-        sys.exit(command_run(image_hint=run_args.image, name=run_args.name, publish=run_args.publish, volumes=run_args.volumes))
+        sys.exit(command_run(
+            image_hint=run_args.image,
+            name=run_args.name,
+            network=run_args.network,
+            publish=run_args.publish,
+            volumes=run_args.volumes,
+        ))
     elif args.command == "start":
         import argparse as _argparse
         start_parser = _argparse.ArgumentParser(
