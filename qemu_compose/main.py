@@ -13,7 +13,7 @@ def guess_conf_path(p:str | None):
     return None
 
 def version(short=False):
-    version = "v0.9.2"
+    version = "v1.0.0"
     if short:
         print(version, file=sys.stderr)
     else:
@@ -31,6 +31,7 @@ def cli():
   ps          List VM instances
   version     Show the qemu-compose version information
   images      List VM images found in local store
+  pull        Pull an OCI/Docker image and import it as a QEMU image
   run         Create and run a new VM from an image
   start       Start an existing VM instance by ID or name
   down        Stop and remove a VM instance
@@ -142,6 +143,85 @@ def cli():
     elif args.command == "images":
         from .cmd.images_command import command_images
         sys.exit(command_images())
+    elif args.command == "pull":
+        import argparse as _argparse
+        pull_parser = _argparse.ArgumentParser(
+            prog="qemu-compose pull",
+            add_help=True,
+            description="Pull an OCI/Docker image and import it as a QEMU qcow2 image",
+        )
+        pull_parser.add_argument(
+            "--kernel",
+            required=True,
+            help="Kernel image used for direct QEMU boot",
+        )
+        pull_parser.add_argument(
+            "--initrd",
+            required=True,
+            help="Initramfs image used for direct QEMU boot",
+        )
+        pull_parser.add_argument(
+            "--platform",
+            default="linux/amd64",
+            help="OCI platform to pull, default: linux/amd64",
+        )
+        pull_parser.add_argument(
+            "--disk-size",
+            default="2G",
+            help="Virtual size of the generated qcow2 root disk, default: 2G",
+        )
+        pull_parser.add_argument(
+            "--boot",
+            choices=["container", "systemd"],
+            default="container",
+            help="Boot mode for the generated image, default: container",
+        )
+        password_group = pull_parser.add_mutually_exclusive_group()
+        password_group.add_argument(
+            "--empty-root-password",
+            action="store_true",
+            default=None,
+            help="Unlock root with an empty password for serial login (default)",
+        )
+        password_group.add_argument(
+            "--root-password",
+            help="Set root password for serial login instead of using an empty password",
+        )
+        pull_parser.add_argument(
+            "--force",
+            action="store_true",
+            default=False,
+            help="Replace an existing local image with the same digest",
+        )
+        pull_parser.add_argument(
+            "--keep-workdir",
+            action="store_true",
+            default=False,
+            help="Keep temporary import files for debugging",
+        )
+        pull_parser.add_argument(
+            "image",
+            type=str,
+            help="Docker/OCI image reference, for example alpine:3.20",
+        )
+        pull_args = pull_parser.parse_args(rest)
+        empty_root_password = pull_args.empty_root_password
+        if empty_root_password is None:
+            empty_root_password = pull_args.root_password is None
+
+        from .cmd.pull_command import command_pull
+        sys.exit(command_pull(
+            image=pull_args.image,
+            kernel=pull_args.kernel,
+            initrd=pull_args.initrd,
+            platform=pull_args.platform,
+            disk_size=pull_args.disk_size,
+            force=pull_args.force,
+            keep_workdir=pull_args.keep_workdir,
+            boot_mode=pull_args.boot,
+            empty_root_password=empty_root_password,
+            root_password=pull_args.root_password,
+        ))
     elif args.command == "run":
         import argparse as _argparse
         run_parser = _argparse.ArgumentParser(
