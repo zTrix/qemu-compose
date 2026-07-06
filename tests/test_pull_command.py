@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import tarfile
 from pathlib import Path
 
 from qemu_compose.cmd import pull_command
 from qemu_compose.cmd.pull_command import command_pull
-from qemu_compose.image.oci_import import OciImportError, normalize_repo_tag
+from qemu_compose.image import oci_import
+from qemu_compose.image.oci_import import OciImportError, make_rootfs_tar, normalize_repo_tag, unpack_oci_image
 
 
 def write_manifest(image_dir: Path, image_id: str, repo_tags: list[str]) -> None:
@@ -81,3 +83,44 @@ def test_pull_reports_import_error(tmp_path, monkeypatch, capsys):
 
     assert command_pull(image="alpine:3.20", kernel="/k", initrd="/i") == 1
     assert "missing required command(s): skopeo" in capsys.readouterr().err
+
+
+def test_unpack_oci_image_uses_rootless_when_not_root(tmp_path, monkeypatch):
+    commands = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        commands.append(cmd)
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import, "run_cmd", fake_run_cmd)
+
+    unpack_oci_image(tmp_path / "oci", tmp_path / "bundle")
+
+    assert commands == [
+        [
+            "umoci",
+            "unpack",
+            "--rootless",
+            "--image",
+            str(tmp_path / "oci") + ":latest",
+            str(tmp_path / "bundle"),
+        ]
+    ]
+
+
+def test_rootfs_tar_normalizes_owner_to_root(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    rootfs.mkdir()
+    (rootfs / "etc").mkdir()
+    (rootfs / "etc" / "issue").write_text("test\n")
+    tar_path = tmp_path / "rootfs.tar"
+
+    make_rootfs_tar(rootfs, tar_path)
+
+    with tarfile.open(tar_path) as tf:
+        members = {member.name: member for member in tf.getmembers()}
+
+    assert members["etc"].uid == 0
+    assert members["etc"].gid == 0
+    assert members["etc/issue"].uid == 0
+    assert members["etc/issue"].gid == 0

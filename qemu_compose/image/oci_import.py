@@ -162,9 +162,19 @@ exec {argv}
 
 
 def make_rootfs_tar(rootfs: Path, tar_path: Path) -> None:
+    def normalize_owner(tar_info: tarfile.TarInfo) -> tarfile.TarInfo:
+        # Rootless OCI unpack cannot chown files on the host. Normalize the
+        # tar stream so the guest image does not inherit the importing user's
+        # uid/gid for core filesystem paths.
+        tar_info.uid = 0
+        tar_info.gid = 0
+        tar_info.uname = "root"
+        tar_info.gname = "root"
+        return tar_info
+
     with tarfile.open(tar_path, "w") as tf:
         for item in rootfs.iterdir():
-            tf.add(item, arcname=item.name, recursive=True)
+            tf.add(item, arcname=item.name, recursive=True, filter=normalize_owner)
 
 
 def build_qcow2(rootfs: Path, disk_path: Path, disk_size: str) -> None:
@@ -260,7 +270,11 @@ def pull_oci_image(image: str, oci_dir: Path, digest_file: Path, platform: str, 
 
 
 def unpack_oci_image(oci_dir: Path, bundle_dir: Path) -> None:
-    run_cmd(["umoci", "unpack", "--image", str(oci_dir) + ":latest", str(bundle_dir)])
+    cmd = ["umoci", "unpack"]
+    if os.geteuid() != 0:
+        cmd.append("--rootless")
+    cmd.extend(["--image", str(oci_dir) + ":latest", str(bundle_dir)])
+    run_cmd(cmd)
 
 
 def write_manifest(
