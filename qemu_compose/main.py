@@ -171,6 +171,12 @@ def cli():
             help="Virtual size of the generated qcow2 root disk, default: 2G",
         )
         pull_parser.add_argument(
+            "--boot",
+            choices=["container", "systemd"],
+            default="container",
+            help="Boot mode for the generated image, default: container",
+        )
+        pull_parser.add_argument(
             "--force",
             action="store_true",
             default=False,
@@ -198,6 +204,7 @@ def cli():
             disk_size=pull_args.disk_size,
             force=pull_args.force,
             keep_workdir=pull_args.keep_workdir,
+            boot_mode=pull_args.boot,
         ))
     elif args.command == "run":
         import argparse as _argparse

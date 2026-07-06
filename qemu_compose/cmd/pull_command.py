@@ -46,6 +46,7 @@ def command_pull(
     disk_size: str = "2G",
     force: bool = False,
     keep_workdir: bool = False,
+    boot_mode: str = "container",
 ) -> int:
     store = LocalStore()
     repo_tag = normalize_repo_tag(image)
@@ -60,6 +61,7 @@ def command_pull(
             disk_size=disk_size,
             force=force,
             keep_workdir=keep_workdir,
+            boot_mode=boot_mode,
         )
     except OciImportError as e:
         print(f"Error: {e}", file=sys.stderr)

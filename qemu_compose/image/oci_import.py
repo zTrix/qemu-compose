@@ -12,6 +12,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+BOOT_CONTAINER = "container"
+BOOT_SYSTEMD = "systemd"
+BOOT_MODES = (BOOT_CONTAINER, BOOT_SYSTEMD)
+
 
 class OciImportError(RuntimeError):
     pass
@@ -162,6 +166,76 @@ cd {shlex.quote(str(working_dir))}
     init_path.chmod(0o755)
 
 
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+
+
+def enable_systemd_unit(rootfs: Path, unit_name: str, target: str = "multi-user.target") -> bool:
+    unit_path = rootfs / "usr" / "lib" / "systemd" / "system" / unit_name
+    if not unit_path.exists():
+        unit_path = rootfs / "etc" / "systemd" / "system" / unit_name
+    if not unit_path.exists():
+        return False
+
+    wants_dir = rootfs / "etc" / "systemd" / "system" / f"{target}.wants"
+    wants_dir.mkdir(parents=True, exist_ok=True)
+    link_path = wants_dir / unit_name
+    try:
+        if link_path.exists() or link_path.is_symlink():
+            link_path.unlink()
+        link_path.symlink_to(f"/usr/lib/systemd/system/{unit_name}")
+    except OSError:
+        return False
+    return True
+
+
+def configure_systemd_rootfs(rootfs: Path) -> None:
+    if not (rootfs / "usr" / "lib" / "systemd" / "systemd").exists():
+        raise OciImportError("systemd boot requested, but /usr/lib/systemd/systemd was not found in the image")
+
+    write_text(rootfs / "etc" / "fstab", "/dev/vda1 / ext4 rw 0 1\n")
+
+    machine_id = rootfs / "etc" / "machine-id"
+    machine_id.parent.mkdir(parents=True, exist_ok=True)
+    machine_id.write_text("")
+
+    imds_generator = rootfs / "usr" / "lib" / "systemd" / "system-generators" / "systemd-imds-generator"
+    if imds_generator.exists():
+        mask_dir = rootfs / "etc" / "systemd" / "system-generators"
+        mask_dir.mkdir(parents=True, exist_ok=True)
+        mask_path = mask_dir / "systemd-imds-generator"
+        if mask_path.exists() or mask_path.is_symlink():
+            mask_path.unlink()
+        mask_path.symlink_to("/dev/null")
+
+    if (rootfs / "usr" / "lib" / "systemd" / "system" / "systemd-networkd.service").exists():
+        write_text(
+            rootfs / "etc" / "systemd" / "network" / "80-dhcp.network",
+            """[Match]
+Name=en*
+Name=eth*
+
+[Network]
+DHCP=yes
+""",
+        )
+        enable_systemd_unit(rootfs, "systemd-networkd.service")
+
+    enable_systemd_unit(rootfs, "systemd-resolved.service")
+    enable_systemd_unit(rootfs, "sshd.service")
+    enable_systemd_unit(rootfs, "qemu-guest-agent.service")
+
+    serial_unit = rootfs / "usr" / "lib" / "systemd" / "system" / "serial-getty@.service"
+    if serial_unit.exists():
+        wants_dir = rootfs / "etc" / "systemd" / "system" / "getty.target.wants"
+        wants_dir.mkdir(parents=True, exist_ok=True)
+        link_path = wants_dir / "serial-getty@ttyS0.service"
+        if link_path.exists() or link_path.is_symlink():
+            link_path.unlink()
+        link_path.symlink_to("/usr/lib/systemd/system/serial-getty@.service")
+
+
 def make_rootfs_tar(rootfs: Path, tar_path: Path) -> None:
     def normalize_owner(tar_info: tarfile.TarInfo) -> tarfile.TarInfo:
         # Rootless OCI unpack cannot chown files on the host. Normalize the
@@ -275,8 +349,16 @@ def write_manifest(
     digest: str,
     image: str,
     metadata: Dict[str, Any],
+    boot_mode: str,
 ) -> None:
     config = metadata["config"]
+    if boot_mode == BOOT_CONTAINER:
+        append_args = "console=ttyS0 root=/dev/vda1 rw init=/qemu-compose-init disablehooks=encrypt"
+    elif boot_mode == BOOT_SYSTEMD:
+        append_args = "console=ttyS0 root=/dev/vda1 rw init=/usr/lib/systemd/systemd systemd.unit=multi-user.target disablehooks=encrypt"
+    else:
+        raise OciImportError(f"unsupported boot mode: {boot_mode}")
+
     manifest = {
         "id": image_id,
         "architecture": str(config.get("architecture") or ""),
@@ -290,10 +372,10 @@ def write_manifest(
             "-initrd",
             "{IMAGE_DIR}/boot/initramfs.img",
             "-append",
-            "console=ttyS0 root=/dev/vda1 rw init=/qemu-compose-init disablehooks=encrypt",
+            append_args,
         ],
         "digest": digest,
-        "comment": f"imported from OCI image {image}",
+        "comment": f"imported from OCI image {image} with {boot_mode} boot",
     }
     with (image_dir / "manifest.json").open("w") as f:
         json.dump(manifest, f, indent=2)
@@ -310,7 +392,11 @@ def import_oci_image(
     disk_size: str,
     force: bool,
     keep_workdir: bool,
+    boot_mode: str,
 ) -> str:
+    if boot_mode not in BOOT_MODES:
+        raise OciImportError(f"unsupported boot mode: {boot_mode}")
+
     image_root_path = Path(image_root)
     image_root_path.mkdir(parents=True, exist_ok=True)
 
@@ -332,15 +418,18 @@ def import_oci_image(
         unpack_oci_image(oci_dir, bundle_dir)
         rootfs = bundle_dir / "rootfs"
         metadata = load_oci_metadata(oci_dir, digest)
-        write_container_config(rootfs, image, metadata["config"])
-        write_init(rootfs, metadata["config"])
+        if boot_mode == BOOT_CONTAINER:
+            write_container_config(rootfs, image, metadata["config"])
+            write_init(rootfs, metadata["config"])
+        elif boot_mode == BOOT_SYSTEMD:
+            configure_systemd_rootfs(rootfs)
 
         staged_dir = work_parent / "image"
         staged_dir.mkdir()
         shutil.copytree(oci_dir, staged_dir / "oci")
         copy_boot_assets(kernel, initrd, staged_dir / "boot")
         build_qcow2(rootfs, staged_dir / "disk.qcow2", disk_size)
-        write_manifest(staged_dir, image_id=image_id, digest=digest, image=image, metadata=metadata)
+        write_manifest(staged_dir, image_id=image_id, digest=digest, image=image, metadata=metadata, boot_mode=boot_mode)
 
         os.rename(staged_dir, final_dir)
         return image_id

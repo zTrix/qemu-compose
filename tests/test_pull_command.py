@@ -8,7 +8,10 @@ from qemu_compose.cmd import pull_command
 from qemu_compose.cmd.pull_command import command_pull
 from qemu_compose.image import oci_import
 from qemu_compose.image.oci_import import (
+    BOOT_CONTAINER,
+    BOOT_SYSTEMD,
     OciImportError,
+    configure_systemd_rootfs,
     init_exec_line,
     make_rootfs_tar,
     normalize_repo_tag,
@@ -156,8 +159,76 @@ def test_manifest_disables_encrypt_hook(tmp_path):
                 "created": "2026-05-06T00:00:00Z",
             }
         },
+        boot_mode=BOOT_CONTAINER,
     )
 
     manifest = json.loads((image_dir / "manifest.json").read_text())
     append_idx = manifest["qemu_args"].index("-append") + 1
     assert "disablehooks=encrypt" in manifest["qemu_args"][append_idx]
+
+
+def test_systemd_manifest_boots_systemd(tmp_path):
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+
+    write_import_manifest(
+        image_dir,
+        image_id="abc123",
+        digest="sha256:abc123",
+        image="archlinux:latest",
+        metadata={
+            "config": {
+                "architecture": "amd64",
+                "os": "linux",
+                "created": "2026-05-06T00:00:00Z",
+            }
+        },
+        boot_mode=BOOT_SYSTEMD,
+    )
+
+    manifest = json.loads((image_dir / "manifest.json").read_text())
+    append_idx = manifest["qemu_args"].index("-append") + 1
+    append_args = manifest["qemu_args"][append_idx]
+    assert "init=/usr/lib/systemd/systemd" in append_args
+    assert "systemd.unit=multi-user.target" in append_args
+    assert "init=/qemu-compose-init" not in append_args
+
+
+def test_configure_systemd_rootfs_enables_vm_units(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    unit_dir = rootfs / "usr" / "lib" / "systemd" / "system"
+    unit_dir.mkdir(parents=True)
+    (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
+    for unit in [
+        "systemd-networkd.service",
+        "systemd-resolved.service",
+        "serial-getty@.service",
+        "sshd.service",
+    ]:
+        (unit_dir / unit).write_text("")
+    generator_dir = rootfs / "usr" / "lib" / "systemd" / "system-generators"
+    generator_dir.mkdir(parents=True)
+    (generator_dir / "systemd-imds-generator").write_text("")
+
+    configure_systemd_rootfs(rootfs)
+
+    assert (rootfs / "etc" / "fstab").read_text() == "/dev/vda1 / ext4 rw 0 1\n"
+    assert (rootfs / "etc" / "machine-id").read_text() == ""
+    assert (rootfs / "etc" / "systemd" / "network" / "80-dhcp.network").exists()
+    assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "systemd-networkd.service").is_symlink()
+    assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "systemd-resolved.service").is_symlink()
+    assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "sshd.service").is_symlink()
+    assert (rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "serial-getty@ttyS0.service").is_symlink()
+    assert (rootfs / "etc" / "systemd" / "system-generators" / "systemd-imds-generator").is_symlink()
+
+
+def test_configure_systemd_rootfs_requires_systemd(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    rootfs.mkdir()
+
+    try:
+        configure_systemd_rootfs(rootfs)
+    except OciImportError as e:
+        assert "systemd boot requested" in str(e)
+    else:
+        raise AssertionError("expected OciImportError")
