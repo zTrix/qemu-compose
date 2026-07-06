@@ -13,13 +13,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-DEFAULT_PULL_PROXIES = {
-    "ALL_PROXY": "socks5h://10.3.6.10:1080",
-    "HTTP_PROXY": "http://10.3.6.10:8123",
-    "HTTPS_PROXY": "http://10.3.6.10:8123",
-}
-
-
 class OciImportError(RuntimeError):
     pass
 
@@ -237,7 +230,7 @@ def copy_boot_assets(kernel: str, initrd: str, boot_dir: Path) -> None:
     shutil.copy2(initrd_path, boot_dir / "initramfs.img")
 
 
-def pull_oci_image(image: str, oci_dir: Path, digest_file: Path, platform: str, *, retry_proxy: bool) -> str:
+def pull_oci_image(image: str, oci_dir: Path, digest_file: Path, platform: str) -> str:
     require_tools(["skopeo", "umoci"])
     platform_parts = platform.split("/")
     if len(platform_parts) < 2:
@@ -263,17 +256,7 @@ def pull_oci_image(image: str, oci_dir: Path, digest_file: Path, platform: str, 
         "docker://" + image,
         "oci:" + str(oci_dir) + ":latest",
     ]
-    try:
-        run_cmd(cmd)
-    except OciImportError:
-        if not retry_proxy:
-            raise
-        env = os.environ.copy()
-        for key, value in DEFAULT_PULL_PROXIES.items():
-            env.setdefault(key, value)
-            env.setdefault(key.lower(), value)
-        print("Initial pull failed; retrying with configured proxy", file=sys.stderr)
-        run_cmd(cmd, env=env)
+    run_cmd(cmd)
     return parse_digest(digest_file.read_text())
 
 
@@ -327,7 +310,6 @@ def import_oci_image(
     disk_size: str,
     force: bool,
     keep_workdir: bool,
-    retry_proxy: bool,
 ) -> str:
     image_root_path = Path(image_root)
     image_root_path.mkdir(parents=True, exist_ok=True)
@@ -338,7 +320,7 @@ def import_oci_image(
         bundle_dir = work_parent / "bundle"
         digest_file = work_parent / "digest"
 
-        digest = pull_oci_image(image, oci_dir, digest_file, platform, retry_proxy=retry_proxy)
+        digest = pull_oci_image(image, oci_dir, digest_file, platform)
         image_id = image_id_from_digest(digest)
         final_dir = image_root_path / image_id
 

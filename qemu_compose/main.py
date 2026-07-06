@@ -183,12 +183,6 @@ def cli():
             help="Keep temporary import files for debugging",
         )
         pull_parser.add_argument(
-            "--no-proxy-retry",
-            action="store_true",
-            default=False,
-            help="Do not retry registry pull using the configured fallback proxy",
-        )
-        pull_parser.add_argument(
             "image",
             type=str,
             help="Docker/OCI image reference, for example alpine:3.20",
@@ -204,7 +198,6 @@ def cli():
             disk_size=pull_args.disk_size,
             force=pull_args.force,
             keep_workdir=pull_args.keep_workdir,
-            retry_proxy=not pull_args.no_proxy_retry,
         ))
     elif args.command == "run":
         import argparse as _argparse

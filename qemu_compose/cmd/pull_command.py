@@ -46,7 +46,6 @@ def command_pull(
     disk_size: str = "2G",
     force: bool = False,
     keep_workdir: bool = False,
-    retry_proxy: bool = True,
 ) -> int:
     store = LocalStore()
     repo_tag = normalize_repo_tag(image)
@@ -61,7 +60,6 @@ def command_pull(
             disk_size=disk_size,
             force=force,
             keep_workdir=keep_workdir,
-            retry_proxy=retry_proxy,
         )
     except OciImportError as e:
         print(f"Error: {e}", file=sys.stderr)
