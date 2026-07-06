@@ -7,7 +7,14 @@ from pathlib import Path
 from qemu_compose.cmd import pull_command
 from qemu_compose.cmd.pull_command import command_pull
 from qemu_compose.image import oci_import
-from qemu_compose.image.oci_import import OciImportError, make_rootfs_tar, normalize_repo_tag, unpack_oci_image
+from qemu_compose.image.oci_import import (
+    OciImportError,
+    init_exec_line,
+    make_rootfs_tar,
+    normalize_repo_tag,
+    unpack_oci_image,
+    write_manifest as write_import_manifest,
+)
 
 
 def write_manifest(image_dir: Path, image_id: str, repo_tags: list[str]) -> None:
@@ -124,3 +131,33 @@ def test_rootfs_tar_normalizes_owner_to_root(tmp_path):
     assert members["etc"].gid == 0
     assert members["etc/issue"].uid == 0
     assert members["etc/issue"].gid == 0
+
+
+def test_init_exec_line_uses_cttyhack_when_available():
+    script = init_exec_line(["/bin/sh"])
+
+    assert "exec setsid cttyhack /bin/sh" in script
+    assert "exec /bin/sh" in script
+
+
+def test_manifest_disables_encrypt_hook(tmp_path):
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+
+    write_import_manifest(
+        image_dir,
+        image_id="abc123",
+        digest="sha256:abc123",
+        image="alpine:3.20",
+        metadata={
+            "config": {
+                "architecture": "amd64",
+                "os": "linux",
+                "created": "2026-05-06T00:00:00Z",
+            }
+        },
+    )
+
+    manifest = json.loads((image_dir / "manifest.json").read_text())
+    append_idx = manifest["qemu_args"].index("-append") + 1
+    assert "disablehooks=encrypt" in manifest["qemu_args"][append_idx]

@@ -121,6 +121,16 @@ def shell_words(values: List[Any]) -> str:
     return " ".join(shlex.quote(str(v)) for v in values if v is not None)
 
 
+def init_exec_line(values: List[Any]) -> str:
+    argv = shell_words(values)
+    if not argv:
+        argv = "/bin/sh"
+    return f"""if command -v setsid >/dev/null 2>&1 && command -v cttyhack >/dev/null 2>&1; then
+    exec setsid cttyhack {argv}
+fi
+exec {argv}"""
+
+
 def write_init(rootfs: Path, config: Dict[str, Any]) -> None:
     import shlex
 
@@ -136,9 +146,7 @@ def write_init(rootfs: Path, config: Dict[str, Any]) -> None:
 
     entrypoint = image_config.get("Entrypoint") or []
     cmd = image_config.get("Cmd") or []
-    argv = shell_words(list(entrypoint) + list(cmd))
-    if not argv:
-        argv = "/bin/sh"
+    exec_lines = init_exec_line(list(entrypoint) + list(cmd))
 
     working_dir = image_config.get("WorkingDir") or "/"
     exports = "\n".join(env_lines)
@@ -154,7 +162,7 @@ mount -t devpts devpts /dev/pts 2>/dev/null || true
 {exports}
 mkdir -p {shlex.quote(str(working_dir))}
 cd {shlex.quote(str(working_dir))}
-exec {argv}
+{exec_lines}
 """
     init_path = rootfs / "qemu-compose-init"
     init_path.write_text(init)
@@ -299,7 +307,7 @@ def write_manifest(
             "-initrd",
             "{IMAGE_DIR}/boot/initramfs.img",
             "-append",
-            "console=ttyS0 root=/dev/vda1 rw init=/qemu-compose-init",
+            "console=ttyS0 root=/dev/vda1 rw init=/qemu-compose-init disablehooks=encrypt",
         ],
         "digest": digest,
         "comment": f"imported from OCI image {image}",
