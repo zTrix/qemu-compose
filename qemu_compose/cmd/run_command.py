@@ -6,7 +6,7 @@ import sys
 import logging
 
 from qemu_compose.local_store import LocalStore
-from qemu_compose.image import resolve_image
+from qemu_compose.image import load_image_by_name, resolve_image
 from qemu_compose.instance.qemu_runner import QemuRunner, QemuConfig
 from qemu_compose.qemu.machine.machine import AbnormalShutdown
 
@@ -15,6 +15,7 @@ logger = logging.getLogger("qemu-compose.cmd.run_command")
 def command_run(*, image_hint: str, name: Optional[str], publish: Optional[List[str]] = None, volumes: Optional[List[str]] = None) -> int:
     store = LocalStore()
 
+    matched_by_name = load_image_by_name(store.image_root, image_hint) is not None
     resolved_id, prefix_matches = resolve_image(store.image_root, image_hint)
 
     # Resolve image id: exact, unique prefix, or repo_tag
@@ -29,7 +30,8 @@ def command_run(*, image_hint: str, name: Optional[str], publish: Optional[List[
 
     cwd = os.getcwd()
 
-    config = QemuConfig(name=name, image=resolved_id, ports=list(publish or []), volumes=list(volumes or []))
+    config_image = image_hint if matched_by_name else resolved_id
+    config = QemuConfig(name=name, image=config_image, ports=list(publish or []), volumes=list(volumes or []))
     vm = QemuRunner(config, store, cwd)
 
     if (exit_code := vm.check_and_lock()) > 0:
