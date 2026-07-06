@@ -34,6 +34,138 @@ Demo:
 
 [![asciicast](https://raw.githubusercontent.com/zTrix/qemu-compose/refs/heads/main/assets/726386.svg)](https://asciinema.org/a/726386)
 
+## Pull OCI/Docker Images
+
+`qemu-compose pull` imports an OCI/Docker image into the local qemu-compose image store as a bootable qcow2 image.
+
+The imported image is stored under:
+
+```
+~/.local/share/qemu-compose/image/<sha256>/
+```
+
+and can then be listed, tagged, removed, or run with the normal image commands:
+
+```
+$ qemu-compose images
+$ qemu-compose run IMAGE[:TAG]
+$ qemu-compose tag SOURCE_IMAGE TARGET_IMAGE
+$ qemu-compose rmi IMAGE
+```
+
+### Dependencies
+
+The pull/import path uses external tools:
+
+- `skopeo`: pull/copy OCI images from registries
+- `umoci`: unpack OCI images
+- `qemu-img`: create qcow2 disks
+- `guestfish`: format and populate the qcow2 root filesystem
+- `openssl`: hash `--root-password` values
+
+On Arch Linux:
+
+```
+$ sudo pacman -S --needed skopeo umoci qemu-img libguestfs openssl
+```
+
+Registry proxies are configured through the normal environment variables used by `skopeo`, for example:
+
+```
+$ HTTPS_PROXY=http://127.0.0.1:8123 qemu-compose pull ...
+```
+
+### Basic Container Boot
+
+Docker/OCI images are root filesystems, not full VM disks. They do not normally include a bootloader, kernel, or initramfs, so `pull` requires direct-boot assets:
+
+- `--kernel`: Linux kernel file copied into the qemu-compose image
+- `--initrd`: initramfs file copied into the qemu-compose image
+
+Example:
+
+```
+$ qemu-compose pull \
+    --kernel /boot/vmlinuz-linux \
+    --initrd /boot/initramfs-linux.img \
+    --disk-size 512M \
+    alpine:3.20
+```
+
+By default, `--boot container` is used. qemu-compose injects `/qemu-compose-init` into the rootfs and boots with:
+
+```
+init=/qemu-compose-init
+```
+
+That init script mounts basic pseudo-filesystems and runs the OCI image's `Entrypoint`/`Cmd`. This is useful for lightweight container-like VM images.
+
+### Systemd Boot
+
+Use `--boot systemd` for images that contain systemd, such as Arch Linux:
+
+```
+$ qemu-compose pull \
+    --boot systemd \
+    --kernel /boot/vmlinuz-linux \
+    --initrd /boot/initramfs-linux.img \
+    --disk-size 2G \
+    registry-mirrors.dev.in.chaitin.net/library/archlinux:latest
+```
+
+In systemd mode, qemu-compose prepares the rootfs for a normal serial-console VM boot:
+
+- boots `init=/usr/lib/systemd/systemd`
+- writes `/etc/fstab` for `/dev/vda1`
+- clears `/etc/machine-id` so systemd regenerates it
+- enables `serial-getty@ttyS0.service` when available
+- writes a DHCP `systemd-networkd` profile and enables `systemd-networkd` when available
+- enables `systemd-resolved`, `sshd`, and `qemu-guest-agent` when those units exist
+- masks `systemd-imds-generator` when present to avoid noisy minimal-image boot warnings
+
+This mode makes an OCI Arch Linux rootfs boot to a normal systemd multi-user login prompt, but it does not install missing packages. If the image does not contain systemd or SSH packages, `pull` will not add them.
+
+### Root Login
+
+By default, `pull` unlocks root with an empty password so serial console login works immediately:
+
+```
+archlinux login: root
+Password:
+```
+
+Press Enter at the password prompt.
+
+To set a real root password instead:
+
+```
+$ qemu-compose pull \
+    --boot systemd \
+    --root-password testpass \
+    --kernel /boot/vmlinuz-linux \
+    --initrd /boot/initramfs-linux.img \
+    registry-mirrors.dev.in.chaitin.net/library/archlinux:latest
+```
+
+`--empty-root-password` is also accepted explicitly, but it cannot be used together with `--root-password`.
+
+### Updating Existing Imports
+
+The image directory name is based on the OCI image digest. If the digest is already present, use `--force` to rebuild it with different options:
+
+```
+$ qemu-compose pull --force --boot systemd ...
+```
+
+Use `--keep-workdir` to keep temporary import files when debugging a failed import.
+
+### Limitations
+
+- `pull` currently creates one ext4 root partition at `/dev/vda1`.
+- It uses direct kernel boot, not GRUB/UEFI boot inside the imported disk.
+- Container boot mode runs the OCI command; systemd boot mode boots systemd, but does not install extra packages.
+- Full devbox images with custom packages, dotfiles, certificates, GRUB, or cloud-init still require a provisioning/build layer on top of the imported rootfs.
+
 ## SSH Helper
 
 qemu-compose provides a helper to invoke ssh with the instance key and safe defaults.
