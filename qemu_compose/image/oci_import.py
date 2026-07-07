@@ -204,13 +204,22 @@ def enable_systemd_unit(rootfs: Path, unit_name: str, target: str = "multi-user.
     return True
 
 
-def chroot_run(rootfs: Path, cmd: List[str]) -> None:
-    res = subprocess.run(["chroot", str(rootfs), *cmd], text=True)
+def sudo_prefix(use_sudo: bool) -> List[str]:
+    if not use_sudo:
+        return []
+    sudo = shutil.which("sudo")
+    if sudo is None:
+        raise OciImportError("systemd boot requested, but systemd is missing and sudo was not found")
+    return [sudo]
+
+
+def chroot_run(rootfs: Path, cmd: List[str], *, use_sudo: bool = False) -> None:
+    res = subprocess.run([*sudo_prefix(use_sudo), "chroot", str(rootfs), *cmd], text=True)
     if res.returncode != 0:
         raise OciImportError("command failed in rootfs: " + " ".join(cmd))
 
 
-def mount_chroot_runtime(rootfs: Path) -> List[Path]:
+def mount_chroot_runtime(rootfs: Path, *, use_sudo: bool = False) -> List[Path]:
     mounted: List[Path] = []
     mounts = [
         (["mount", "-t", "proc", "proc"], rootfs / "proc"),
@@ -221,14 +230,31 @@ def mount_chroot_runtime(rootfs: Path) -> List[Path]:
         target.mkdir(parents=True, exist_ok=True)
         if subprocess.run(["mountpoint", "-q", str(target)]).returncode == 0:
             continue
-        run_cmd([*cmd, str(target)])
+        run_cmd([*sudo_prefix(use_sudo), *cmd, str(target)])
         mounted.append(target)
     return mounted
 
 
-def unmount_chroot_runtime(mounted: List[Path]) -> None:
+def unmount_chroot_runtime(mounted: List[Path], *, use_sudo: bool = False) -> None:
     for target in reversed(mounted):
-        subprocess.run(["umount", "-R", str(target)], check=False)
+        subprocess.run([*sudo_prefix(use_sudo), "umount", "-R", "-l", str(target)], check=False)
+
+
+def restore_rootfs_write_ownership(rootfs: Path) -> None:
+    uid = os.getuid()
+    gid = os.getgid()
+    targets = [
+        rootfs / "etc",
+        rootfs / "usr" / "lib" / "systemd",
+        rootfs / "lib" / "systemd",
+        rootfs / "var" / "lib" / "systemd",
+    ]
+    existing = [str(path) for path in targets if path.exists() or path.is_symlink()]
+    if not existing:
+        return
+    res = subprocess.run([*sudo_prefix(True), "chown", "-R", f"{uid}:{gid}", *existing], text=True)
+    if res.returncode != 0:
+        raise OciImportError("failed to restore rootfs ownership after Debian/Ubuntu package install")
 
 
 def install_debian_systemd_packages(rootfs: Path) -> bool:
@@ -236,18 +262,18 @@ def install_debian_systemd_packages(rootfs: Path) -> bool:
         return True
     if not path_exists(rootfs, "/usr/bin/apt-get"):
         return False
-    if os.geteuid() != 0:
-        raise OciImportError("systemd boot requested, but systemd is missing and apt-based setup requires root")
+    use_sudo = os.geteuid() != 0
 
     resolv_conf = Path("/etc/resolv.conf")
     if resolv_conf.exists():
+        (rootfs / "etc").mkdir(parents=True, exist_ok=True)
         shutil.copy2(resolv_conf, rootfs / "etc" / "resolv.conf")
 
     print("Installing systemd packages into Debian/Ubuntu rootfs", flush=True)
-    mounted = mount_chroot_runtime(rootfs)
+    mounted = mount_chroot_runtime(rootfs, use_sudo=use_sudo)
     try:
         env = "DEBIAN_FRONTEND=noninteractive"
-        chroot_run(rootfs, ["env", env, "apt-get", "update"])
+        chroot_run(rootfs, ["env", env, "apt-get", "update"], use_sudo=use_sudo)
         chroot_run(
             rootfs,
             [
@@ -264,9 +290,12 @@ def install_debian_systemd_packages(rootfs: Path) -> bool:
                 "iproute2",
                 "openssh-server",
             ],
+            use_sudo=use_sudo,
         )
+        if use_sudo:
+            restore_rootfs_write_ownership(rootfs)
     finally:
-        unmount_chroot_runtime(mounted)
+        unmount_chroot_runtime(mounted, use_sudo=use_sudo)
 
     return systemd_binary_path(rootfs) is not None
 

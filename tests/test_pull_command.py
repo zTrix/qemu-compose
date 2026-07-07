@@ -286,6 +286,61 @@ def test_configure_systemd_rootfs_requires_systemd(tmp_path):
         raise AssertionError("expected OciImportError")
 
 
+def test_install_debian_systemd_packages_uses_sudo_when_not_root(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "usr" / "bin").mkdir(parents=True)
+    (rootfs / "usr" / "bin" / "apt-get").write_text("")
+    (rootfs / "etc").mkdir()
+    (rootfs / "proc").mkdir()
+    commands = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        commands.append(cmd)
+        target = Path(cmd[-1])
+        marker = target / ".mounted"
+        marker.write_text("")
+
+    def fake_subprocess_run(cmd, **kwargs):
+        commands.append(cmd)
+
+        class Result:
+            returncode = 1
+
+        if cmd[:2] == ["mountpoint", "-q"]:
+            return Result()
+        if cmd[:2] == ["/usr/bin/sudo", "chroot"] and "install" in cmd:
+            (rootfs / "usr" / "lib" / "systemd").mkdir(parents=True)
+            (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
+        Result.returncode = 0
+        return Result()
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: "/usr/bin/sudo" if tool == "sudo" else None)
+    monkeypatch.setattr(oci_import, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_subprocess_run)
+
+    assert oci_import.install_debian_systemd_packages(rootfs) is True
+    assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] for cmd in commands)
+    assert any(cmd[:3] == ["/usr/bin/sudo", "chown", "-R"] for cmd in commands)
+    assert any(cmd[:3] == ["/usr/bin/sudo", "umount", "-R"] for cmd in commands)
+
+
+def test_install_debian_systemd_packages_requires_sudo_for_non_root(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "usr" / "bin").mkdir(parents=True)
+    (rootfs / "usr" / "bin" / "apt-get").write_text("")
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: None)
+
+    try:
+        oci_import.install_debian_systemd_packages(rootfs)
+    except OciImportError as e:
+        assert "sudo was not found" in str(e)
+    else:
+        raise AssertionError("expected OciImportError")
+
+
 def test_set_root_empty_password_unlocks_shadow_and_pam(tmp_path):
     rootfs = tmp_path / "rootfs"
     shadow = rootfs / "etc" / "shadow"
