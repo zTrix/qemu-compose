@@ -12,9 +12,13 @@ from qemu_compose.image.oci_import import (
     BOOT_SYSTEMD,
     OciImportError,
     configure_systemd_rootfs,
+    copy_boot_asset,
+    copy_kernel_modules,
     ensure_pam_nullok,
     hash_root_password,
     init_exec_line,
+    kernel_release_from_initrd,
+    kernel_release_from_image,
     make_rootfs_tar,
     normalize_repo_tag,
     set_root_empty_password,
@@ -208,6 +212,7 @@ def test_configure_systemd_rootfs_enables_vm_units(tmp_path):
     for unit in [
         "systemd-networkd.service",
         "systemd-resolved.service",
+        "console-getty.service",
         "serial-getty@.service",
         "sshd.service",
     ]:
@@ -224,8 +229,53 @@ def test_configure_systemd_rootfs_enables_vm_units(tmp_path):
     assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "systemd-networkd.service").is_symlink()
     assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "systemd-resolved.service").is_symlink()
     assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "sshd.service").is_symlink()
-    assert (rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "serial-getty@ttyS0.service").is_symlink()
+    assert (rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "console-getty.service").is_symlink()
+    assert not (rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "serial-getty@ttyS0.service").exists()
     assert (rootfs / "etc" / "systemd" / "system-generators" / "systemd-imds-generator").is_symlink()
+
+
+def test_configure_systemd_rootfs_does_not_install_packages_for_arch_layout(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    unit_dir = rootfs / "usr" / "lib" / "systemd" / "system"
+    unit_dir.mkdir(parents=True)
+    (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
+
+    def fail_chroot_run(rootfs, cmd):
+        raise AssertionError("Arch-style systemd rootfs should not invoke apt/chroot")
+
+    monkeypatch.setattr(oci_import, "chroot_run", fail_chroot_run)
+
+    configure_systemd_rootfs(rootfs)
+
+    assert (rootfs / "etc" / "fstab").exists()
+
+
+def test_configure_systemd_rootfs_supports_debian_systemd_layout(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    unit_dir = rootfs / "lib" / "systemd" / "system"
+    unit_dir.mkdir(parents=True)
+    (rootfs / "lib" / "systemd" / "systemd").write_text("")
+    for unit in [
+        "systemd-networkd.service",
+        "systemd-resolved.service",
+        "console-getty.service",
+        "serial-getty@.service",
+        "ssh.service",
+    ]:
+        (unit_dir / unit).write_text("")
+
+    configure_systemd_rootfs(rootfs)
+
+    assert (rootfs / "usr" / "lib" / "systemd" / "systemd").is_symlink()
+    assert (rootfs / "usr" / "lib" / "systemd" / "systemd").readlink() == Path("/lib/systemd/systemd")
+    assert (rootfs / "etc" / "systemd" / "network" / "80-dhcp.network").exists()
+    assert (
+        rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "systemd-networkd.service"
+    ).readlink() == Path("/lib/systemd/system/systemd-networkd.service")
+    assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "ssh.service").is_symlink()
+    assert (
+        rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "console-getty.service"
+    ).readlink() == Path("/lib/systemd/system/console-getty.service")
 
 
 def test_configure_systemd_rootfs_requires_systemd(tmp_path):
@@ -238,6 +288,99 @@ def test_configure_systemd_rootfs_requires_systemd(tmp_path):
         assert "systemd boot requested" in str(e)
     else:
         raise AssertionError("expected OciImportError")
+
+
+def test_install_debian_systemd_packages_uses_sudo_when_not_root(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "usr" / "bin").mkdir(parents=True)
+    (rootfs / "usr" / "bin" / "apt-get").write_text("")
+    (rootfs / "etc").mkdir()
+    (rootfs / "proc").mkdir()
+    commands = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        commands.append(cmd)
+        target = Path(cmd[-1])
+        marker = target / ".mounted"
+        marker.write_text("")
+
+    def fake_subprocess_run(cmd, **kwargs):
+        commands.append(cmd)
+
+        class Result:
+            returncode = 1
+
+        if cmd[:2] == ["mountpoint", "-q"]:
+            return Result()
+        if cmd[:2] == ["/usr/bin/sudo", "chroot"] and "install" in cmd:
+            (rootfs / "usr" / "lib" / "systemd").mkdir(parents=True)
+            (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
+        Result.returncode = 0
+        return Result()
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: "/usr/bin/sudo" if tool == "sudo" else None)
+    monkeypatch.setattr(oci_import, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_subprocess_run)
+
+    assert oci_import.install_debian_systemd_packages(rootfs) is True
+    assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] for cmd in commands)
+    assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] and "kmod" in cmd for cmd in commands)
+    assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] and "udev" in cmd for cmd in commands)
+    assert any(cmd[:3] == ["/usr/bin/sudo", "chown", "-R"] for cmd in commands)
+    assert any(cmd[:3] == ["/usr/bin/sudo", "umount", "-l"] for cmd in commands)
+    assert not any("--rbind" in cmd for cmd in commands)
+    assert not any(cmd[:3] == ["/usr/bin/sudo", "umount", "-R"] for cmd in commands)
+
+
+def test_install_debian_systemd_packages_requires_sudo_for_non_root(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "usr" / "bin").mkdir(parents=True)
+    (rootfs / "usr" / "bin" / "apt-get").write_text("")
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: None)
+
+    try:
+        oci_import.install_debian_systemd_packages(rootfs)
+    except OciImportError as e:
+        assert "sudo was not found" in str(e)
+    else:
+        raise AssertionError("expected OciImportError")
+
+
+def test_copy_boot_asset_uses_sudo_when_source_is_not_readable(tmp_path, monkeypatch):
+    source = tmp_path / "initramfs.img"
+    target = tmp_path / "boot" / "initramfs.img"
+    source.write_text("initrd")
+    commands = []
+
+    def fake_copy2(source, target):
+        raise PermissionError()
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd[:2] == ["/usr/bin/sudo", "cp"]:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source.read_text())
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.os, "getgid", lambda: 1000)
+    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: "/usr/bin/sudo" if tool == "sudo" else None)
+    monkeypatch.setattr(oci_import.shutil, "copy2", fake_copy2)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
+
+    copy_boot_asset(source, target)
+
+    assert target.read_text() == "initrd"
+    assert any(cmd[:3] == ["/usr/bin/sudo", "cp", "-a"] for cmd in commands)
+    assert any(cmd[:2] == ["/usr/bin/sudo", "chown"] for cmd in commands)
 
 
 def test_set_root_empty_password_unlocks_shadow_and_pam(tmp_path):
@@ -264,6 +407,121 @@ def test_ensure_pam_nullok_is_idempotent(tmp_path):
     ensure_pam_nullok(rootfs)
 
     assert pam.read_text() == "auth required pam_unix.so nullok\n"
+
+
+def test_kernel_release_from_image_reads_linux_version(tmp_path):
+    kernel = tmp_path / "vmlinuz"
+    kernel.write_bytes(b"prefix Linux version 6.18.37-1-lts (builder@example) suffix")
+
+    assert kernel_release_from_image(str(kernel)) == "6.18.37-1-lts"
+
+
+def test_kernel_release_from_initrd_uses_lsinitcpio(tmp_path, monkeypatch):
+    initrd = tmp_path / "initramfs.img"
+    initrd.write_text("")
+
+    def fake_which(tool):
+        return "/usr/bin/" + tool if tool == "lsinitcpio" else None
+
+    def fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "usr/lib/modules/7.0.14-arch1-1/kernel/drivers/block/virtio_blk.ko.zst\n"
+
+        assert cmd == ["lsinitcpio", "-l", str(initrd)]
+        return Result()
+
+    monkeypatch.setattr(oci_import.shutil, "which", fake_which)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
+
+    assert kernel_release_from_initrd(str(initrd)) == "7.0.14-arch1-1"
+
+
+def test_kernel_release_from_initrd_retries_with_sudo(tmp_path, monkeypatch):
+    initrd = tmp_path / "initramfs.img"
+    initrd.write_text("")
+    commands = []
+
+    def fake_which(tool):
+        if tool in ("lsinitcpio", "sudo"):
+            return "/usr/bin/" + tool
+        return None
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+
+        class Result:
+            returncode = 1
+            stdout = ""
+
+        if cmd[:2] == ["/usr/bin/sudo", "lsinitcpio"]:
+            Result.returncode = 0
+            Result.stdout = "usr/lib/modules/7.1.2-arch3-1/kernel/drivers/net/virtio_net.ko.zst\n"
+        return Result()
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.shutil, "which", fake_which)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
+
+    assert kernel_release_from_initrd(str(initrd)) == "7.1.2-arch3-1"
+    assert commands[0] == ["lsinitcpio", "-l", str(initrd)]
+    assert commands[1] == ["/usr/bin/sudo", "lsinitcpio", "-l", str(initrd)]
+
+
+def test_copy_kernel_modules_copies_matching_module_tree(tmp_path):
+    kernel = tmp_path / "vmlinuz"
+    kernel.write_bytes(b"Linux version 6.18.37-1-lts (builder@example)")
+    modules_root = tmp_path / "modules-root"
+    module_dir = modules_root / "6.18.37-1-lts"
+    module_dir.mkdir(parents=True)
+    (module_dir / "modules.dep").write_text("kernel/drivers/net/virtio_net.ko.zst:\n")
+    net_dir = module_dir / "kernel" / "drivers" / "net"
+    net_dir.mkdir(parents=True)
+    (net_dir / "virtio_net.ko.zst").write_text("module")
+    rootfs = tmp_path / "rootfs"
+
+    assert copy_kernel_modules(rootfs, str(kernel), modules_roots=[modules_root]) is True
+    assert (rootfs / "usr" / "lib" / "modules" / "6.18.37-1-lts" / "modules.dep").exists()
+    assert (
+        rootfs
+        / "usr"
+        / "lib"
+        / "modules"
+        / "6.18.37-1-lts"
+        / "kernel"
+        / "drivers"
+        / "net"
+        / "virtio_net.ko.zst"
+    ).exists()
+
+
+def test_copy_kernel_modules_prefers_initrd_release(tmp_path, monkeypatch):
+    kernel = tmp_path / "vmlinuz"
+    kernel.write_bytes(b"")
+    initrd = tmp_path / "initramfs.img"
+    initrd.write_text("")
+    modules_root = tmp_path / "modules-root"
+    module_dir = modules_root / "7.0.14-arch1-1"
+    module_dir.mkdir(parents=True)
+    (module_dir / "modules.dep").write_text("")
+    rootfs = tmp_path / "rootfs"
+
+    monkeypatch.setattr(oci_import, "kernel_release_from_initrd", lambda initrd_path: "7.0.14-arch1-1")
+    monkeypatch.setattr(oci_import.os, "uname", lambda: type("Uname", (), {"release": "6.18.37-1-lts"})())
+
+    assert copy_kernel_modules(rootfs, str(kernel), str(initrd), modules_roots=[modules_root]) is True
+    assert (rootfs / "usr" / "lib" / "modules" / "7.0.14-arch1-1" / "modules.dep").exists()
+    assert not (rootfs / "usr" / "lib" / "modules" / "6.18.37-1-lts").exists()
+
+
+def test_copy_kernel_modules_warns_when_matching_modules_missing(tmp_path, capsys):
+    kernel = tmp_path / "vmlinuz"
+    kernel.write_bytes(b"Linux version 6.18.37-1-lts (builder@example)")
+    rootfs = tmp_path / "rootfs"
+
+    assert copy_kernel_modules(rootfs, str(kernel), modules_roots=[tmp_path / "missing"]) is False
+
+    assert "kernel modules not found for 6.18.37-1-lts" in capsys.readouterr().err
 
 
 def test_set_root_password_hash_updates_shadow_without_nullok(tmp_path):

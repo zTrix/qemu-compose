@@ -61,19 +61,24 @@ def _is_pid_running(pid: Optional[int]) -> bool:
         return False
 
 
-def command_down(*, identifier: Optional[str] = None, force: bool = False, config_path: Optional[str] = None) -> int:
-    store = LocalStore()
+def resolve_instance(
+    *,
+    store: LocalStore,
+    identifier: Optional[str] = None,
+    config_path: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str], int]:
     instance_root = store.instance_root
 
     if not os.path.exists(instance_root):
         print("Error: no instances found", file=sys.stderr)
-        return 1
+        return None, None, 1
 
     ids = _list_vmids(instance_root)
     name_index = _build_name_index(instance_root)
 
     vmid = None
     candidates = []
+    display_identifier = identifier
 
     if identifier:
         vmid, candidates = _resolve_identifier(identifier, ids, name_index)
@@ -81,23 +86,60 @@ def command_down(*, identifier: Optional[str] = None, force: bool = False, confi
         from qemu_compose.instance.qemu_runner import QemuConfig
         config = QemuConfig.load_yaml(config_path)
         if config.name:
+            display_identifier = config.name
             vmid, candidates = _resolve_identifier(config.name, ids, name_index)
         else:
             print("Error: config file does not specify a name", file=sys.stderr)
-            return 1
+            return None, None, 1
     else:
         print("Error: identifier is required", file=sys.stderr)
-        return 1
+        return None, None, 1
 
     if vmid is None and not candidates:
-        print(f"Error: instance not found: {identifier}", file=sys.stderr)
-        return 1
+        print(f"Error: instance not found: {display_identifier}", file=sys.stderr)
+        return None, display_identifier, 1
 
     if vmid is None and candidates:
         preview = ", ".join(sorted(candidates)[:8])
         more = "" if len(candidates) <= 8 else f" ... and {len(candidates)-8} more"
-        print(f"Error: identifier '{identifier}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
-        return 1
+        print(f"Error: identifier '{display_identifier}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
+        return None, display_identifier, 1
+
+    return vmid, display_identifier, 0
+
+
+def instance_label(vmid: str, name: Optional[str]) -> str:
+    return f"{vmid}" if not name else f"{name} ({vmid})"
+
+
+def stop_pid(pid: int) -> bool:
+    try:
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.time() + SHUTDOWN_TIMEOUT
+        while time.time() < deadline:
+            if not _is_pid_running(pid):
+                return True
+            time.sleep(0.1)
+        logger.warning("Process did not terminate gracefully, sending SIGKILL")
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(0.5)
+        return not _is_pid_running(pid)
+    except OSError as e:
+        logger.warning("Failed to send signal to process: %s", e)
+        return not _is_pid_running(pid)
+
+
+def command_down(
+    *,
+    identifier: Optional[str] = None,
+    force: bool = False,
+    config_path: Optional[str] = None,
+    stop_running: bool = True,
+) -> int:
+    store = LocalStore()
+    vmid, display_identifier, exit_code = resolve_instance(store=store, identifier=identifier, config_path=config_path)
+    if exit_code != 0 or vmid is None:
+        return exit_code
 
     instance_dir = store.instance_dir(vmid)
 
@@ -109,26 +151,21 @@ def command_down(*, identifier: Optional[str] = None, force: bool = False, confi
     name = safe_read(os.path.join(instance_dir, "name"))
 
     if pid and _is_pid_running(pid):
-        instance_label = f"{vmid}" if not name else f"{name} ({vmid})"
-        print(f"Stopping instance {instance_label} (pid: {pid})...", flush=True)
-        try:
-            os.kill(pid, signal.SIGTERM)
-            deadline = time.time() + SHUTDOWN_TIMEOUT
-            while time.time() < deadline:
-                if not _is_pid_running(pid):
-                    break
-                time.sleep(0.1)
-            else:
-                logger.warning("Process did not terminate gracefully, sending SIGKILL")
-                os.kill(pid, signal.SIGKILL)
-                time.sleep(0.5)
-        except OSError as e:
-            logger.warning("Failed to send signal to process: %s", e)
+        if not stop_running and not force:
+            remove_id = display_identifier or identifier or vmid
+            print(
+                f'Error response: cannot remove vm "{remove_id}": vm is running: '
+                "stop the vm before removing or force remove",
+                file=sys.stderr,
+            )
+            return 1
+
+        print(f"Stopping instance {instance_label(vmid, name)} (pid: {pid})...", flush=True)
+        stop_pid(pid)
 
     try:
         shutil.rmtree(instance_dir)
-        instance_label = f"{vmid}" if not name else f"{name} ({vmid})"
-        print(f"Removed instance {instance_label}", flush=True)
+        print(f"Removed instance {instance_label(vmid, name)}", flush=True)
     except PermissionError as e:
         print(f"Error: permission denied removing instance directory: {e}", file=sys.stderr)
         return 1

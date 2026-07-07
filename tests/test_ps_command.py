@@ -52,7 +52,7 @@ def test_ps_shows_image_tag_when_repo_tag_still_exists(tmp_path, monkeypatch, ca
     assert "repo:latest" in out
 
 
-def test_ps_shows_short_image_id_when_repo_tag_no_longer_exists(tmp_path, monkeypatch, capsys):
+def test_ps_shows_current_repo_tag_when_stored_repo_tag_no_longer_exists(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
 
     image_id = "abcdef1234567890abcdef1234567890"
@@ -67,5 +67,42 @@ def test_ps_shows_short_image_id_when_repo_tag_no_longer_exists(tmp_path, monkey
     assert command_ps(show_all=True) == 0
 
     out = capsys.readouterr().out
-    assert image_id[:12] in out
+    assert "repo:v2" in out
     assert "repo:latest" not in out
+
+
+def test_ps_shows_current_repo_tag_when_stored_image_is_id(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    image_id = "fedcba1234567890fedcba1234567890"
+    write_manifest(tmp_path / "qemu-compose" / "image" / image_id, image_id, ["repo:latest"])
+    write_instance_meta(
+        tmp_path / "qemu-compose" / "instance" / "inst-fedcba123456",
+        name="vm3",
+        image=image_id,
+        image_id=image_id,
+    )
+
+    assert command_ps(show_all=True) == 0
+
+    out = capsys.readouterr().out
+    assert "repo:latest" in out
+    assert image_id[:12] not in out
+
+
+def test_ps_shows_short_image_id_when_manifest_has_no_repo_tags(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    image_id = "0123456789abcdef0123456789abcdef"
+    write_manifest(tmp_path / "qemu-compose" / "image" / image_id, image_id, [])
+    write_instance_meta(
+        tmp_path / "qemu-compose" / "instance" / "inst-0123456789ab",
+        name="vm4",
+        image=image_id,
+        image_id=image_id,
+    )
+
+    assert command_ps(show_all=True) == 0
+
+    out = capsys.readouterr().out
+    assert image_id[:12] in out

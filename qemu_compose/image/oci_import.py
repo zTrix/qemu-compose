@@ -167,11 +167,29 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content)
 
 
+def path_exists(rootfs: Path, path: str) -> bool:
+    candidate = rootfs / path.lstrip("/")
+    return candidate.exists() or candidate.is_symlink()
+
+
+def systemd_binary_path(rootfs: Path) -> Optional[str]:
+    for path in ("/usr/lib/systemd/systemd", "/lib/systemd/systemd"):
+        if path_exists(rootfs, path):
+            return path
+    return None
+
+
+def systemd_unit_path(rootfs: Path, unit_name: str) -> Optional[str]:
+    for directory in ("/usr/lib/systemd/system", "/lib/systemd/system", "/etc/systemd/system"):
+        path = f"{directory}/{unit_name}"
+        if path_exists(rootfs, path):
+            return path
+    return None
+
+
 def enable_systemd_unit(rootfs: Path, unit_name: str, target: str = "multi-user.target") -> bool:
-    unit_path = rootfs / "usr" / "lib" / "systemd" / "system" / unit_name
-    if not unit_path.exists():
-        unit_path = rootfs / "etc" / "systemd" / "system" / unit_name
-    if not unit_path.exists():
+    unit_path = systemd_unit_path(rootfs, unit_name)
+    if not unit_path:
         return False
 
     wants_dir = rootfs / "etc" / "systemd" / "system" / f"{target}.wants"
@@ -180,15 +198,113 @@ def enable_systemd_unit(rootfs: Path, unit_name: str, target: str = "multi-user.
     try:
         if link_path.exists() or link_path.is_symlink():
             link_path.unlink()
-        link_path.symlink_to(f"/usr/lib/systemd/system/{unit_name}")
+        link_path.symlink_to(unit_path)
     except OSError:
         return False
     return True
 
 
+def sudo_prefix(use_sudo: bool) -> List[str]:
+    if not use_sudo:
+        return []
+    sudo = shutil.which("sudo")
+    if sudo is None:
+        raise OciImportError("systemd boot requested, but systemd is missing and sudo was not found")
+    return [sudo]
+
+
+def chroot_run(rootfs: Path, cmd: List[str], *, use_sudo: bool = False) -> None:
+    res = subprocess.run([*sudo_prefix(use_sudo), "chroot", str(rootfs), *cmd], text=True)
+    if res.returncode != 0:
+        raise OciImportError("command failed in rootfs: " + " ".join(cmd))
+
+
+def mount_chroot_runtime(rootfs: Path, *, use_sudo: bool = False) -> List[Path]:
+    mounted: List[Path] = []
+    mounts = [
+        (["mount", "-t", "proc", "proc"], rootfs / "proc"),
+        (["mount", "-t", "sysfs", "sysfs"], rootfs / "sys"),
+        (["mount", "-t", "devtmpfs", "devtmpfs"], rootfs / "dev"),
+        (["mount", "-t", "devpts", "devpts", "-o", "gid=5,mode=620,ptmxmode=666"], rootfs / "dev" / "pts"),
+    ]
+    for cmd, target in mounts:
+        target.mkdir(parents=True, exist_ok=True)
+        if subprocess.run(["mountpoint", "-q", str(target)]).returncode == 0:
+            continue
+        run_cmd([*sudo_prefix(use_sudo), *cmd, str(target)])
+        mounted.append(target)
+    return mounted
+
+
+def unmount_chroot_runtime(mounted: List[Path], *, use_sudo: bool = False) -> None:
+    for target in reversed(mounted):
+        subprocess.run([*sudo_prefix(use_sudo), "umount", "-l", str(target)], check=False)
+
+
+def restore_rootfs_write_ownership(rootfs: Path) -> None:
+    uid = os.getuid()
+    gid = os.getgid()
+    res = subprocess.run([*sudo_prefix(True), "chown", "-R", f"{uid}:{gid}", str(rootfs)], text=True)
+    if res.returncode != 0:
+        raise OciImportError("failed to restore rootfs ownership after Debian/Ubuntu package install")
+
+
+def install_debian_systemd_packages(rootfs: Path) -> bool:
+    if systemd_binary_path(rootfs):
+        return True
+    if not path_exists(rootfs, "/usr/bin/apt-get"):
+        return False
+    use_sudo = os.geteuid() != 0
+
+    resolv_conf = Path("/etc/resolv.conf")
+    if resolv_conf.exists():
+        (rootfs / "etc").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(resolv_conf, rootfs / "etc" / "resolv.conf")
+
+    print("Installing systemd packages into Debian/Ubuntu rootfs", flush=True)
+    mounted: List[Path] = []
+    try:
+        mounted = mount_chroot_runtime(rootfs, use_sudo=use_sudo)
+        env = "DEBIAN_FRONTEND=noninteractive"
+        chroot_run(rootfs, ["env", env, "apt-get", "update"], use_sudo=use_sudo)
+        chroot_run(
+            rootfs,
+            [
+                "env",
+                env,
+                "apt-get",
+                "install",
+                "-y",
+                "--no-install-recommends",
+                "systemd",
+                "systemd-sysv",
+                "systemd-resolved",
+                "dbus",
+                "iproute2",
+                "kmod",
+                "udev",
+                "openssh-server",
+            ],
+            use_sudo=use_sudo,
+        )
+    finally:
+        unmount_chroot_runtime(mounted, use_sudo=use_sudo)
+        if use_sudo:
+            restore_rootfs_write_ownership(rootfs)
+
+    return systemd_binary_path(rootfs) is not None
+
+
 def configure_systemd_rootfs(rootfs: Path) -> None:
-    if not (rootfs / "usr" / "lib" / "systemd" / "systemd").exists():
-        raise OciImportError("systemd boot requested, but /usr/lib/systemd/systemd was not found in the image")
+    if not install_debian_systemd_packages(rootfs):
+        raise OciImportError("systemd boot requested, but systemd was not found in the image")
+
+    systemd_path = systemd_binary_path(rootfs)
+    if systemd_path and systemd_path != "/usr/lib/systemd/systemd":
+        compat_path = rootfs / "usr" / "lib" / "systemd" / "systemd"
+        compat_path.parent.mkdir(parents=True, exist_ok=True)
+        if not compat_path.exists() and not compat_path.is_symlink():
+            compat_path.symlink_to(systemd_path)
 
     write_text(rootfs / "etc" / "fstab", "/dev/vda1 / ext4 rw 0 1\n")
 
@@ -196,8 +312,15 @@ def configure_systemd_rootfs(rootfs: Path) -> None:
     machine_id.parent.mkdir(parents=True, exist_ok=True)
     machine_id.write_text("")
 
-    imds_generator = rootfs / "usr" / "lib" / "systemd" / "system-generators" / "systemd-imds-generator"
-    if imds_generator.exists():
+    imds_generator = None
+    for path in (
+        "/usr/lib/systemd/system-generators/systemd-imds-generator",
+        "/lib/systemd/system-generators/systemd-imds-generator",
+    ):
+        if path_exists(rootfs, path):
+            imds_generator = rootfs / path.lstrip("/")
+            break
+    if imds_generator is not None:
         mask_dir = rootfs / "etc" / "systemd" / "system-generators"
         mask_dir.mkdir(parents=True, exist_ok=True)
         mask_path = mask_dir / "systemd-imds-generator"
@@ -205,7 +328,7 @@ def configure_systemd_rootfs(rootfs: Path) -> None:
             mask_path.unlink()
         mask_path.symlink_to("/dev/null")
 
-    if (rootfs / "usr" / "lib" / "systemd" / "system" / "systemd-networkd.service").exists():
+    if systemd_unit_path(rootfs, "systemd-networkd.service"):
         write_text(
             rootfs / "etc" / "systemd" / "network" / "80-dhcp.network",
             """[Match]
@@ -220,16 +343,20 @@ DHCP=yes
 
     enable_systemd_unit(rootfs, "systemd-resolved.service")
     enable_systemd_unit(rootfs, "sshd.service")
+    enable_systemd_unit(rootfs, "ssh.service")
     enable_systemd_unit(rootfs, "qemu-guest-agent.service")
 
-    serial_unit = rootfs / "usr" / "lib" / "systemd" / "system" / "serial-getty@.service"
-    if serial_unit.exists():
+    if enable_systemd_unit(rootfs, "console-getty.service", target="getty.target"):
+        return
+
+    serial_unit = systemd_unit_path(rootfs, "serial-getty@.service")
+    if serial_unit:
         wants_dir = rootfs / "etc" / "systemd" / "system" / "getty.target.wants"
         wants_dir.mkdir(parents=True, exist_ok=True)
         link_path = wants_dir / "serial-getty@ttyS0.service"
         if link_path.exists() or link_path.is_symlink():
             link_path.unlink()
-        link_path.symlink_to("/usr/lib/systemd/system/serial-getty@.service")
+        link_path.symlink_to(serial_unit)
 
 
 def set_root_password_hash(rootfs: Path, password_hash: str, *, allow_empty_password: bool = False) -> None:
@@ -375,8 +502,86 @@ def copy_boot_assets(kernel: str, initrd: str, boot_dir: Path) -> None:
     if not initrd_path.is_file():
         raise OciImportError(f"initrd not found: {initrd}")
     boot_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(kernel_path, boot_dir / "vmlinuz")
-    shutil.copy2(initrd_path, boot_dir / "initramfs.img")
+    copy_boot_asset(kernel_path, boot_dir / "vmlinuz")
+    copy_boot_asset(initrd_path, boot_dir / "initramfs.img")
+
+
+def copy_boot_asset(source: Path, target: Path) -> None:
+    try:
+        shutil.copy2(source, target)
+        return
+    except PermissionError:
+        if os.geteuid() == 0:
+            raise
+
+    res = subprocess.run([*sudo_prefix(True), "cp", "-a", str(source), str(target)], text=True)
+    if res.returncode != 0:
+        raise OciImportError(f"failed to copy boot asset: {source}")
+    res = subprocess.run([*sudo_prefix(True), "chown", f"{os.getuid()}:{os.getgid()}", str(target)], text=True)
+    if res.returncode != 0:
+        raise OciImportError(f"failed to restore boot asset ownership: {target}")
+
+
+def kernel_release_from_image(kernel: str) -> Optional[str]:
+    try:
+        data = Path(kernel).read_bytes()
+    except OSError:
+        return None
+
+    match = re.search(rb"Linux version ([0-9A-Za-z_.+-]+)", data)
+    if match:
+        return match.group(1).decode("ascii", errors="ignore")
+    return None
+
+
+def kernel_release_from_initrd(initrd: str) -> Optional[str]:
+    tools = [["lsinitcpio", "-l", initrd], ["lsinitramfs", initrd]]
+    for cmd in tools:
+        if shutil.which(cmd[0]) is None:
+            continue
+        for prefix in ([], sudo_prefix(True) if os.geteuid() != 0 and shutil.which("sudo") else []):
+            try:
+                res = subprocess.run([*prefix, *cmd], text=True, capture_output=True, check=False)
+            except OSError:
+                continue
+            if res.returncode != 0:
+                continue
+            match = re.search(r"(?:^|/)lib/modules/([^/\s]+)/", res.stdout, re.MULTILINE)
+            if match:
+                return match.group(1)
+    return None
+
+
+def copy_kernel_modules(
+    rootfs: Path,
+    kernel: str,
+    initrd: Optional[str] = None,
+    modules_roots: Optional[List[Path]] = None,
+) -> bool:
+    release = kernel_release_from_initrd(initrd) if initrd else None
+    if not release:
+        release = kernel_release_from_image(kernel)
+    if not release:
+        release = os.uname().release
+
+    if modules_roots is None:
+        modules_roots = [Path("/usr/lib/modules"), Path("/lib/modules")]
+
+    source = None
+    for root in modules_roots:
+        candidate = root / release
+        if candidate.is_dir():
+            source = candidate
+            break
+
+    if source is None:
+        print(f"Warning: kernel modules not found for {release}; guest devices may not have drivers", file=sys.stderr)
+        return False
+
+    target = rootfs / "usr" / "lib" / "modules" / release
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True)
+    return True
 
 
 def pull_oci_image(image: str, oci_dir: Path, digest_file: Path, platform: str) -> str:
@@ -506,6 +711,7 @@ def import_oci_image(
             set_root_password_hash(rootfs, hash_root_password(root_password))
         elif empty_root_password:
             set_root_empty_password(rootfs)
+        copy_kernel_modules(rootfs, kernel, initrd)
 
         staged_dir = work_parent / "image"
         staged_dir.mkdir()

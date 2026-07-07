@@ -19,6 +19,46 @@ def version(short=False):
     else:
         print("qemu-compose version %s" % version, file=sys.stderr)
 
+def command_down(rest: list[str]) -> int:
+    import argparse as _argparse
+    down_parser = _argparse.ArgumentParser(
+        prog="qemu-compose down",
+        add_help=True,
+        description="Stop and remove the VM instance defined by qemu-compose.yml in the current directory",
+    )
+    down_parser.parse_args(rest)
+    config_path = guess_conf_path(None)
+    if not config_path:
+        print("qemu-compose.yml not found", file=sys.stderr)
+        return 1
+
+    from .cmd.down_command import command_down as _command_down
+    return _command_down(config_path=config_path, stop_running=True)
+
+
+def command_rm(rest: list[str]) -> int:
+    import argparse as _argparse
+    rm_parser = _argparse.ArgumentParser(
+        prog="qemu-compose rm",
+        add_help=True,
+        description="Remove a stopped VM instance",
+    )
+    rm_parser.add_argument(
+        "identifier",
+        type=str,
+        help="Instance ID, unique prefix, or assigned name",
+    )
+    rm_parser.add_argument(
+        "-f", "--force",
+        action="store_true",
+        default=False,
+        help="Force removal of a running VM by stopping it first",
+    )
+    rm_args = rm_parser.parse_args(rest)
+
+    from .cmd.down_command import command_down as _command_down
+    return _command_down(identifier=rm_args.identifier, force=rm_args.force, stop_running=False)
+
 def cli():
     import argparse
     parser = argparse.ArgumentParser(
@@ -34,7 +74,9 @@ def cli():
   pull        Pull an OCI/Docker image and import it as a QEMU image
   run         Create and run a new VM from an image
   start       Start an existing VM instance by ID or name
+  stop        Stop a running VM instance by ID or name
   down        Stop and remove a VM instance
+  rm          Remove a VM instance
   tag         Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE
   rmi         Remove an image tag or image by ID
  """,
@@ -249,6 +291,11 @@ def cli():
             help="Bind-mount a host directory into the guest using virtiofs; format: src:dst[:ro]; repeatable",
         )
         run_parser.add_argument(
+            "--network",
+            choices=["user", "none"],
+            help="Network mode for the VM; default is user",
+        )
+        run_parser.add_argument(
             "image",
             type=str,
             help="Image identifier",
@@ -256,7 +303,13 @@ def cli():
         run_args = run_parser.parse_args(rest)
 
         from .cmd.run_command import command_run
-        sys.exit(command_run(image_hint=run_args.image, name=run_args.name, publish=run_args.publish, volumes=run_args.volumes))
+        sys.exit(command_run(
+            image_hint=run_args.image,
+            name=run_args.name,
+            network=run_args.network,
+            publish=run_args.publish,
+            volumes=run_args.volumes,
+        ))
     elif args.command == "start":
         import argparse as _argparse
         start_parser = _argparse.ArgumentParser(
@@ -280,41 +333,26 @@ def cli():
 
         from .cmd.start_command import command_start
         sys.exit(command_start(identifier=start_args.identifier, config_path=start_args.file))
-    elif args.command == "down":
+    elif args.command == "stop":
         import argparse as _argparse
-        down_parser = _argparse.ArgumentParser(
-            prog="qemu-compose down",
+        stop_parser = _argparse.ArgumentParser(
+            prog="qemu-compose stop",
             add_help=True,
-            description="Stop and remove a VM instance",
+            description="Stop a running VM instance by ID or name",
         )
-        down_parser.add_argument(
+        stop_parser.add_argument(
             "identifier",
             type=str,
-            nargs='?',
             help="Instance ID, unique prefix, or assigned name",
         )
-        down_parser.add_argument(
-            "-f", "--file",
-            type=str,
-            required=False,
-            help="Compose configuration file to parse for instance name",
-        )
-        down_parser.add_argument(
-            "--force",
-            action="store_true",
-            default=False,
-            help="Force removal without confirmation",
-        )
-        down_args = down_parser.parse_args(rest)
+        stop_args = stop_parser.parse_args(rest)
 
-        config_path = None
-        if down_args.file:
-            config_path = down_args.file
-        else:
-            config_path = guess_conf_path(None)
-
-        from .cmd.down_command import command_down
-        sys.exit(command_down(identifier=down_args.identifier, force=down_args.force, config_path=config_path))
+        from .cmd.stop_command import command_stop
+        sys.exit(command_stop(identifier=stop_args.identifier))
+    elif args.command == "down":
+        sys.exit(command_down(rest))
+    elif args.command == "rm":
+        sys.exit(command_rm(rest))
     elif args.command == "tag":
         import argparse as _argparse
         tag_parser = _argparse.ArgumentParser(
