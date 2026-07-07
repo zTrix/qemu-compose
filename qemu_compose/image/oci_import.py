@@ -167,11 +167,29 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content)
 
 
+def path_exists(rootfs: Path, path: str) -> bool:
+    candidate = rootfs / path.lstrip("/")
+    return candidate.exists() or candidate.is_symlink()
+
+
+def systemd_binary_path(rootfs: Path) -> Optional[str]:
+    for path in ("/usr/lib/systemd/systemd", "/lib/systemd/systemd"):
+        if path_exists(rootfs, path):
+            return path
+    return None
+
+
+def systemd_unit_path(rootfs: Path, unit_name: str) -> Optional[str]:
+    for directory in ("/usr/lib/systemd/system", "/lib/systemd/system", "/etc/systemd/system"):
+        path = f"{directory}/{unit_name}"
+        if path_exists(rootfs, path):
+            return path
+    return None
+
+
 def enable_systemd_unit(rootfs: Path, unit_name: str, target: str = "multi-user.target") -> bool:
-    unit_path = rootfs / "usr" / "lib" / "systemd" / "system" / unit_name
-    if not unit_path.exists():
-        unit_path = rootfs / "etc" / "systemd" / "system" / unit_name
-    if not unit_path.exists():
+    unit_path = systemd_unit_path(rootfs, unit_name)
+    if not unit_path:
         return False
 
     wants_dir = rootfs / "etc" / "systemd" / "system" / f"{target}.wants"
@@ -180,15 +198,89 @@ def enable_systemd_unit(rootfs: Path, unit_name: str, target: str = "multi-user.
     try:
         if link_path.exists() or link_path.is_symlink():
             link_path.unlink()
-        link_path.symlink_to(f"/usr/lib/systemd/system/{unit_name}")
+        link_path.symlink_to(unit_path)
     except OSError:
         return False
     return True
 
 
+def chroot_run(rootfs: Path, cmd: List[str]) -> None:
+    res = subprocess.run(["chroot", str(rootfs), *cmd], text=True)
+    if res.returncode != 0:
+        raise OciImportError("command failed in rootfs: " + " ".join(cmd))
+
+
+def mount_chroot_runtime(rootfs: Path) -> List[Path]:
+    mounted: List[Path] = []
+    mounts = [
+        (["mount", "-t", "proc", "proc"], rootfs / "proc"),
+        (["mount", "--rbind", "/sys"], rootfs / "sys"),
+        (["mount", "--rbind", "/dev"], rootfs / "dev"),
+    ]
+    for cmd, target in mounts:
+        target.mkdir(parents=True, exist_ok=True)
+        if subprocess.run(["mountpoint", "-q", str(target)]).returncode == 0:
+            continue
+        run_cmd([*cmd, str(target)])
+        mounted.append(target)
+    return mounted
+
+
+def unmount_chroot_runtime(mounted: List[Path]) -> None:
+    for target in reversed(mounted):
+        subprocess.run(["umount", "-R", str(target)], check=False)
+
+
+def install_debian_systemd_packages(rootfs: Path) -> bool:
+    if systemd_binary_path(rootfs):
+        return True
+    if not path_exists(rootfs, "/usr/bin/apt-get"):
+        return False
+    if os.geteuid() != 0:
+        raise OciImportError("systemd boot requested, but systemd is missing and apt-based setup requires root")
+
+    resolv_conf = Path("/etc/resolv.conf")
+    if resolv_conf.exists():
+        shutil.copy2(resolv_conf, rootfs / "etc" / "resolv.conf")
+
+    print("Installing systemd packages into Debian/Ubuntu rootfs", flush=True)
+    mounted = mount_chroot_runtime(rootfs)
+    try:
+        env = "DEBIAN_FRONTEND=noninteractive"
+        chroot_run(rootfs, ["env", env, "apt-get", "update"])
+        chroot_run(
+            rootfs,
+            [
+                "env",
+                env,
+                "apt-get",
+                "install",
+                "-y",
+                "--no-install-recommends",
+                "systemd",
+                "systemd-sysv",
+                "systemd-resolved",
+                "dbus",
+                "iproute2",
+                "openssh-server",
+            ],
+        )
+    finally:
+        unmount_chroot_runtime(mounted)
+
+    return systemd_binary_path(rootfs) is not None
+
+
 def configure_systemd_rootfs(rootfs: Path) -> None:
-    if not (rootfs / "usr" / "lib" / "systemd" / "systemd").exists():
-        raise OciImportError("systemd boot requested, but /usr/lib/systemd/systemd was not found in the image")
+    if not install_debian_systemd_packages(rootfs):
+        raise OciImportError("systemd boot requested, but systemd was not found in the image")
+
+    systemd_path = systemd_binary_path(rootfs)
+    if systemd_path and systemd_path != "/usr/lib/systemd/systemd":
+        compat_path = rootfs / "usr" / "lib" / "systemd" / "systemd"
+        compat_path.parent.mkdir(parents=True, exist_ok=True)
+        if not compat_path.exists() and not compat_path.is_symlink():
+            compat_path.symlink_to(systemd_path)
 
     write_text(rootfs / "etc" / "fstab", "/dev/vda1 / ext4 rw 0 1\n")
 
@@ -196,8 +288,15 @@ def configure_systemd_rootfs(rootfs: Path) -> None:
     machine_id.parent.mkdir(parents=True, exist_ok=True)
     machine_id.write_text("")
 
-    imds_generator = rootfs / "usr" / "lib" / "systemd" / "system-generators" / "systemd-imds-generator"
-    if imds_generator.exists():
+    imds_generator = None
+    for path in (
+        "/usr/lib/systemd/system-generators/systemd-imds-generator",
+        "/lib/systemd/system-generators/systemd-imds-generator",
+    ):
+        if path_exists(rootfs, path):
+            imds_generator = rootfs / path.lstrip("/")
+            break
+    if imds_generator is not None:
         mask_dir = rootfs / "etc" / "systemd" / "system-generators"
         mask_dir.mkdir(parents=True, exist_ok=True)
         mask_path = mask_dir / "systemd-imds-generator"
@@ -205,7 +304,7 @@ def configure_systemd_rootfs(rootfs: Path) -> None:
             mask_path.unlink()
         mask_path.symlink_to("/dev/null")
 
-    if (rootfs / "usr" / "lib" / "systemd" / "system" / "systemd-networkd.service").exists():
+    if systemd_unit_path(rootfs, "systemd-networkd.service"):
         write_text(
             rootfs / "etc" / "systemd" / "network" / "80-dhcp.network",
             """[Match]
@@ -220,16 +319,17 @@ DHCP=yes
 
     enable_systemd_unit(rootfs, "systemd-resolved.service")
     enable_systemd_unit(rootfs, "sshd.service")
+    enable_systemd_unit(rootfs, "ssh.service")
     enable_systemd_unit(rootfs, "qemu-guest-agent.service")
 
-    serial_unit = rootfs / "usr" / "lib" / "systemd" / "system" / "serial-getty@.service"
-    if serial_unit.exists():
+    serial_unit = systemd_unit_path(rootfs, "serial-getty@.service")
+    if serial_unit:
         wants_dir = rootfs / "etc" / "systemd" / "system" / "getty.target.wants"
         wants_dir.mkdir(parents=True, exist_ok=True)
         link_path = wants_dir / "serial-getty@ttyS0.service"
         if link_path.exists() or link_path.is_symlink():
             link_path.unlink()
-        link_path.symlink_to("/usr/lib/systemd/system/serial-getty@.service")
+        link_path.symlink_to(serial_unit)
 
 
 def set_root_password_hash(rootfs: Path, password_hash: str, *, allow_empty_password: bool = False) -> None:

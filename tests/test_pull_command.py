@@ -231,6 +231,49 @@ def test_configure_systemd_rootfs_enables_vm_units(tmp_path):
     assert (rootfs / "etc" / "systemd" / "system-generators" / "systemd-imds-generator").is_symlink()
 
 
+def test_configure_systemd_rootfs_does_not_install_packages_for_arch_layout(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    unit_dir = rootfs / "usr" / "lib" / "systemd" / "system"
+    unit_dir.mkdir(parents=True)
+    (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
+
+    def fail_chroot_run(rootfs, cmd):
+        raise AssertionError("Arch-style systemd rootfs should not invoke apt/chroot")
+
+    monkeypatch.setattr(oci_import, "chroot_run", fail_chroot_run)
+
+    configure_systemd_rootfs(rootfs)
+
+    assert (rootfs / "etc" / "fstab").exists()
+
+
+def test_configure_systemd_rootfs_supports_debian_systemd_layout(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    unit_dir = rootfs / "lib" / "systemd" / "system"
+    unit_dir.mkdir(parents=True)
+    (rootfs / "lib" / "systemd" / "systemd").write_text("")
+    for unit in [
+        "systemd-networkd.service",
+        "systemd-resolved.service",
+        "serial-getty@.service",
+        "ssh.service",
+    ]:
+        (unit_dir / unit).write_text("")
+
+    configure_systemd_rootfs(rootfs)
+
+    assert (rootfs / "usr" / "lib" / "systemd" / "systemd").is_symlink()
+    assert (rootfs / "usr" / "lib" / "systemd" / "systemd").readlink() == Path("/lib/systemd/systemd")
+    assert (rootfs / "etc" / "systemd" / "network" / "80-dhcp.network").exists()
+    assert (
+        rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "systemd-networkd.service"
+    ).readlink() == Path("/lib/systemd/system/systemd-networkd.service")
+    assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "ssh.service").is_symlink()
+    assert (
+        rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "serial-getty@ttyS0.service"
+    ).readlink() == Path("/lib/systemd/system/serial-getty@.service")
+
+
 def test_configure_systemd_rootfs_requires_systemd(tmp_path):
     rootfs = tmp_path / "rootfs"
     rootfs.mkdir()
