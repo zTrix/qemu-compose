@@ -7,6 +7,17 @@ from qemu_compose.utils import list_subdirs
 from .manifest import ImageManifest, RepoTag, DiskSpec
 
 
+def list_image_ids(image_root: str) -> List[str]:
+    image_ids = []
+    for image_id in list_subdirs(image_root):
+        if image_id.startswith("."):
+            continue
+        manifest_path = os.path.join(image_root, image_id, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            continue
+        image_ids.append(image_id)
+    return image_ids
+
 
 def _short_image_id(digest: Optional[str]) -> str:
     if not digest:
@@ -47,7 +58,7 @@ def _rows_for_image(image_root: str, image_id: str) -> List[Tuple[str, str, str,
 
 
 def list_image(image_root: str) -> List[Tuple[str, str, str, str, str]]:
-    rows = [row for image_id in list_subdirs(image_root) for row in _rows_for_image(image_root, image_id)]
+    rows = [row for image_id in list_image_ids(image_root) for row in _rows_for_image(image_root, image_id)]
     rows.sort(key=lambda r: (r[0], r[1]))
     return rows
 
@@ -58,10 +69,8 @@ def load_image_by_id(image_root: str, image_id: str) -> Optional[ImageManifest]:
     return ImageManifest.load_file(dir_path)
 
 def load_image_by_name(image_root: str, name: str) -> Optional[ImageManifest]:
-    for image_id in list_subdirs(image_root):
+    for image_id in list_image_ids(image_root):
         dir_path = os.path.join(image_root, image_id)
-        if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
-            continue
 
         manifest = ImageManifest.load_file(dir_path)
 
@@ -70,7 +79,7 @@ def load_image_by_name(image_root: str, name: str) -> Optional[ImageManifest]:
     return None
 
 def resolve_image_by_prefix(image_root: str, token: str) -> Tuple[Optional[str], List[str]]:
-    ids = list_subdirs(image_root)
+    ids = list_image_ids(image_root)
     if token in ids:
         return token, [token]
 
