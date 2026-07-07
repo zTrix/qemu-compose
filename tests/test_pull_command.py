@@ -12,9 +12,12 @@ from qemu_compose.image.oci_import import (
     BOOT_SYSTEMD,
     OciImportError,
     configure_systemd_rootfs,
+    copy_kernel_modules,
     ensure_pam_nullok,
     hash_root_password,
     init_exec_line,
+    kernel_release_from_initrd,
+    kernel_release_from_image,
     make_rootfs_tar,
     normalize_repo_tag,
     set_root_empty_password,
@@ -264,6 +267,90 @@ def test_ensure_pam_nullok_is_idempotent(tmp_path):
     ensure_pam_nullok(rootfs)
 
     assert pam.read_text() == "auth required pam_unix.so nullok\n"
+
+
+def test_kernel_release_from_image_reads_linux_version(tmp_path):
+    kernel = tmp_path / "vmlinuz"
+    kernel.write_bytes(b"prefix Linux version 6.18.37-1-lts (builder@example) suffix")
+
+    assert kernel_release_from_image(str(kernel)) == "6.18.37-1-lts"
+
+
+def test_kernel_release_from_initrd_uses_lsinitcpio(tmp_path, monkeypatch):
+    initrd = tmp_path / "initramfs.img"
+    initrd.write_text("")
+
+    def fake_which(tool):
+        return "/usr/bin/" + tool if tool == "lsinitcpio" else None
+
+    def fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "usr/lib/modules/7.0.14-arch1-1/kernel/drivers/block/virtio_blk.ko.zst\n"
+
+        assert cmd == ["lsinitcpio", "-l", str(initrd)]
+        return Result()
+
+    monkeypatch.setattr(oci_import.shutil, "which", fake_which)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
+
+    assert kernel_release_from_initrd(str(initrd)) == "7.0.14-arch1-1"
+
+
+def test_copy_kernel_modules_copies_matching_module_tree(tmp_path):
+    kernel = tmp_path / "vmlinuz"
+    kernel.write_bytes(b"Linux version 6.18.37-1-lts (builder@example)")
+    modules_root = tmp_path / "modules-root"
+    module_dir = modules_root / "6.18.37-1-lts"
+    module_dir.mkdir(parents=True)
+    (module_dir / "modules.dep").write_text("kernel/drivers/net/virtio_net.ko.zst:\n")
+    net_dir = module_dir / "kernel" / "drivers" / "net"
+    net_dir.mkdir(parents=True)
+    (net_dir / "virtio_net.ko.zst").write_text("module")
+    rootfs = tmp_path / "rootfs"
+
+    assert copy_kernel_modules(rootfs, str(kernel), modules_roots=[modules_root]) is True
+    assert (rootfs / "usr" / "lib" / "modules" / "6.18.37-1-lts" / "modules.dep").exists()
+    assert (
+        rootfs
+        / "usr"
+        / "lib"
+        / "modules"
+        / "6.18.37-1-lts"
+        / "kernel"
+        / "drivers"
+        / "net"
+        / "virtio_net.ko.zst"
+    ).exists()
+
+
+def test_copy_kernel_modules_prefers_initrd_release(tmp_path, monkeypatch):
+    kernel = tmp_path / "vmlinuz"
+    kernel.write_bytes(b"")
+    initrd = tmp_path / "initramfs.img"
+    initrd.write_text("")
+    modules_root = tmp_path / "modules-root"
+    module_dir = modules_root / "7.0.14-arch1-1"
+    module_dir.mkdir(parents=True)
+    (module_dir / "modules.dep").write_text("")
+    rootfs = tmp_path / "rootfs"
+
+    monkeypatch.setattr(oci_import, "kernel_release_from_initrd", lambda initrd_path: "7.0.14-arch1-1")
+    monkeypatch.setattr(oci_import.os, "uname", lambda: type("Uname", (), {"release": "6.18.37-1-lts"})())
+
+    assert copy_kernel_modules(rootfs, str(kernel), str(initrd), modules_roots=[modules_root]) is True
+    assert (rootfs / "usr" / "lib" / "modules" / "7.0.14-arch1-1" / "modules.dep").exists()
+    assert not (rootfs / "usr" / "lib" / "modules" / "6.18.37-1-lts").exists()
+
+
+def test_copy_kernel_modules_warns_when_matching_modules_missing(tmp_path, capsys):
+    kernel = tmp_path / "vmlinuz"
+    kernel.write_bytes(b"Linux version 6.18.37-1-lts (builder@example)")
+    rootfs = tmp_path / "rootfs"
+
+    assert copy_kernel_modules(rootfs, str(kernel), modules_roots=[tmp_path / "missing"]) is False
+
+    assert "kernel modules not found for 6.18.37-1-lts" in capsys.readouterr().err
 
 
 def test_set_root_password_hash_updates_shadow_without_nullok(tmp_path):

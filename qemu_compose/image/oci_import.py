@@ -379,6 +379,67 @@ def copy_boot_assets(kernel: str, initrd: str, boot_dir: Path) -> None:
     shutil.copy2(initrd_path, boot_dir / "initramfs.img")
 
 
+def kernel_release_from_image(kernel: str) -> Optional[str]:
+    try:
+        data = Path(kernel).read_bytes()
+    except OSError:
+        return None
+
+    match = re.search(rb"Linux version ([0-9A-Za-z_.+-]+)", data)
+    if match:
+        return match.group(1).decode("ascii", errors="ignore")
+    return None
+
+
+def kernel_release_from_initrd(initrd: str) -> Optional[str]:
+    tools = [["lsinitcpio", "-l", initrd], ["lsinitramfs", initrd]]
+    for cmd in tools:
+        if shutil.which(cmd[0]) is None:
+            continue
+        try:
+            res = subprocess.run(cmd, text=True, capture_output=True, check=False)
+        except OSError:
+            continue
+        if res.returncode != 0:
+            continue
+        match = re.search(r"(?:^|/)lib/modules/([^/\s]+)/", res.stdout, re.MULTILINE)
+        if match:
+            return match.group(1)
+    return None
+
+
+def copy_kernel_modules(
+    rootfs: Path,
+    kernel: str,
+    initrd: Optional[str] = None,
+    modules_roots: Optional[List[Path]] = None,
+) -> bool:
+    release = kernel_release_from_initrd(initrd) if initrd else None
+    if not release:
+        release = kernel_release_from_image(kernel)
+    if not release:
+        release = os.uname().release
+
+    if modules_roots is None:
+        modules_roots = [Path("/usr/lib/modules"), Path("/lib/modules")]
+
+    source = None
+    for root in modules_roots:
+        candidate = root / release
+        if candidate.is_dir():
+            source = candidate
+            break
+
+    if source is None:
+        print(f"Warning: kernel modules not found for {release}; guest devices may not have drivers", file=sys.stderr)
+        return False
+
+    target = rootfs / "usr" / "lib" / "modules" / release
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True)
+    return True
+
+
 def pull_oci_image(image: str, oci_dir: Path, digest_file: Path, platform: str) -> str:
     require_tools(["skopeo", "umoci"])
     platform_parts = platform.split("/")
@@ -506,6 +567,7 @@ def import_oci_image(
             set_root_password_hash(rootfs, hash_root_password(root_password))
         elif empty_root_password:
             set_root_empty_password(rootfs)
+        copy_kernel_modules(rootfs, kernel, initrd)
 
         staged_dir = work_parent / "image"
         staged_dir.mkdir()
