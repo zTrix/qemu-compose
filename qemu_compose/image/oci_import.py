@@ -223,8 +223,9 @@ def mount_chroot_runtime(rootfs: Path, *, use_sudo: bool = False) -> List[Path]:
     mounted: List[Path] = []
     mounts = [
         (["mount", "-t", "proc", "proc"], rootfs / "proc"),
-        (["mount", "--rbind", "/sys"], rootfs / "sys"),
-        (["mount", "--rbind", "/dev"], rootfs / "dev"),
+        (["mount", "-t", "sysfs", "sysfs"], rootfs / "sys"),
+        (["mount", "-t", "devtmpfs", "devtmpfs"], rootfs / "dev"),
+        (["mount", "-t", "devpts", "devpts", "-o", "gid=5,mode=620,ptmxmode=666"], rootfs / "dev" / "pts"),
     ]
     for cmd, target in mounts:
         target.mkdir(parents=True, exist_ok=True)
@@ -237,22 +238,13 @@ def mount_chroot_runtime(rootfs: Path, *, use_sudo: bool = False) -> List[Path]:
 
 def unmount_chroot_runtime(mounted: List[Path], *, use_sudo: bool = False) -> None:
     for target in reversed(mounted):
-        subprocess.run([*sudo_prefix(use_sudo), "umount", "-R", "-l", str(target)], check=False)
+        subprocess.run([*sudo_prefix(use_sudo), "umount", "-l", str(target)], check=False)
 
 
 def restore_rootfs_write_ownership(rootfs: Path) -> None:
     uid = os.getuid()
     gid = os.getgid()
-    targets = [
-        rootfs / "etc",
-        rootfs / "usr" / "lib" / "systemd",
-        rootfs / "lib" / "systemd",
-        rootfs / "var" / "lib" / "systemd",
-    ]
-    existing = [str(path) for path in targets if path.exists() or path.is_symlink()]
-    if not existing:
-        return
-    res = subprocess.run([*sudo_prefix(True), "chown", "-R", f"{uid}:{gid}", *existing], text=True)
+    res = subprocess.run([*sudo_prefix(True), "chown", "-R", f"{uid}:{gid}", str(rootfs)], text=True)
     if res.returncode != 0:
         raise OciImportError("failed to restore rootfs ownership after Debian/Ubuntu package install")
 
@@ -270,8 +262,9 @@ def install_debian_systemd_packages(rootfs: Path) -> bool:
         shutil.copy2(resolv_conf, rootfs / "etc" / "resolv.conf")
 
     print("Installing systemd packages into Debian/Ubuntu rootfs", flush=True)
-    mounted = mount_chroot_runtime(rootfs, use_sudo=use_sudo)
+    mounted: List[Path] = []
     try:
+        mounted = mount_chroot_runtime(rootfs, use_sudo=use_sudo)
         env = "DEBIAN_FRONTEND=noninteractive"
         chroot_run(rootfs, ["env", env, "apt-get", "update"], use_sudo=use_sudo)
         chroot_run(
@@ -288,14 +281,16 @@ def install_debian_systemd_packages(rootfs: Path) -> bool:
                 "systemd-resolved",
                 "dbus",
                 "iproute2",
+                "kmod",
+                "udev",
                 "openssh-server",
             ],
             use_sudo=use_sudo,
         )
-        if use_sudo:
-            restore_rootfs_write_ownership(rootfs)
     finally:
         unmount_chroot_runtime(mounted, use_sudo=use_sudo)
+        if use_sudo:
+            restore_rootfs_write_ownership(rootfs)
 
     return systemd_binary_path(rootfs) is not None
 
@@ -350,6 +345,9 @@ DHCP=yes
     enable_systemd_unit(rootfs, "sshd.service")
     enable_systemd_unit(rootfs, "ssh.service")
     enable_systemd_unit(rootfs, "qemu-guest-agent.service")
+
+    if enable_systemd_unit(rootfs, "console-getty.service", target="getty.target"):
+        return
 
     serial_unit = systemd_unit_path(rootfs, "serial-getty@.service")
     if serial_unit:
@@ -504,8 +502,24 @@ def copy_boot_assets(kernel: str, initrd: str, boot_dir: Path) -> None:
     if not initrd_path.is_file():
         raise OciImportError(f"initrd not found: {initrd}")
     boot_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(kernel_path, boot_dir / "vmlinuz")
-    shutil.copy2(initrd_path, boot_dir / "initramfs.img")
+    copy_boot_asset(kernel_path, boot_dir / "vmlinuz")
+    copy_boot_asset(initrd_path, boot_dir / "initramfs.img")
+
+
+def copy_boot_asset(source: Path, target: Path) -> None:
+    try:
+        shutil.copy2(source, target)
+        return
+    except PermissionError:
+        if os.geteuid() == 0:
+            raise
+
+    res = subprocess.run([*sudo_prefix(True), "cp", "-a", str(source), str(target)], text=True)
+    if res.returncode != 0:
+        raise OciImportError(f"failed to copy boot asset: {source}")
+    res = subprocess.run([*sudo_prefix(True), "chown", f"{os.getuid()}:{os.getgid()}", str(target)], text=True)
+    if res.returncode != 0:
+        raise OciImportError(f"failed to restore boot asset ownership: {target}")
 
 
 def kernel_release_from_image(kernel: str) -> Optional[str]:
@@ -525,15 +539,16 @@ def kernel_release_from_initrd(initrd: str) -> Optional[str]:
     for cmd in tools:
         if shutil.which(cmd[0]) is None:
             continue
-        try:
-            res = subprocess.run(cmd, text=True, capture_output=True, check=False)
-        except OSError:
-            continue
-        if res.returncode != 0:
-            continue
-        match = re.search(r"(?:^|/)lib/modules/([^/\s]+)/", res.stdout, re.MULTILINE)
-        if match:
-            return match.group(1)
+        for prefix in ([], sudo_prefix(True) if os.geteuid() != 0 and shutil.which("sudo") else []):
+            try:
+                res = subprocess.run([*prefix, *cmd], text=True, capture_output=True, check=False)
+            except OSError:
+                continue
+            if res.returncode != 0:
+                continue
+            match = re.search(r"(?:^|/)lib/modules/([^/\s]+)/", res.stdout, re.MULTILINE)
+            if match:
+                return match.group(1)
     return None
 
 

@@ -12,6 +12,7 @@ from qemu_compose.image.oci_import import (
     BOOT_SYSTEMD,
     OciImportError,
     configure_systemd_rootfs,
+    copy_boot_asset,
     copy_kernel_modules,
     ensure_pam_nullok,
     hash_root_password,
@@ -211,6 +212,7 @@ def test_configure_systemd_rootfs_enables_vm_units(tmp_path):
     for unit in [
         "systemd-networkd.service",
         "systemd-resolved.service",
+        "console-getty.service",
         "serial-getty@.service",
         "sshd.service",
     ]:
@@ -227,7 +229,8 @@ def test_configure_systemd_rootfs_enables_vm_units(tmp_path):
     assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "systemd-networkd.service").is_symlink()
     assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "systemd-resolved.service").is_symlink()
     assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "sshd.service").is_symlink()
-    assert (rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "serial-getty@ttyS0.service").is_symlink()
+    assert (rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "console-getty.service").is_symlink()
+    assert not (rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "serial-getty@ttyS0.service").exists()
     assert (rootfs / "etc" / "systemd" / "system-generators" / "systemd-imds-generator").is_symlink()
 
 
@@ -255,6 +258,7 @@ def test_configure_systemd_rootfs_supports_debian_systemd_layout(tmp_path):
     for unit in [
         "systemd-networkd.service",
         "systemd-resolved.service",
+        "console-getty.service",
         "serial-getty@.service",
         "ssh.service",
     ]:
@@ -270,8 +274,8 @@ def test_configure_systemd_rootfs_supports_debian_systemd_layout(tmp_path):
     ).readlink() == Path("/lib/systemd/system/systemd-networkd.service")
     assert (rootfs / "etc" / "systemd" / "system" / "multi-user.target.wants" / "ssh.service").is_symlink()
     assert (
-        rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "serial-getty@ttyS0.service"
-    ).readlink() == Path("/lib/systemd/system/serial-getty@.service")
+        rootfs / "etc" / "systemd" / "system" / "getty.target.wants" / "console-getty.service"
+    ).readlink() == Path("/lib/systemd/system/console-getty.service")
 
 
 def test_configure_systemd_rootfs_requires_systemd(tmp_path):
@@ -321,8 +325,12 @@ def test_install_debian_systemd_packages_uses_sudo_when_not_root(tmp_path, monke
 
     assert oci_import.install_debian_systemd_packages(rootfs) is True
     assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] for cmd in commands)
+    assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] and "kmod" in cmd for cmd in commands)
+    assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] and "udev" in cmd for cmd in commands)
     assert any(cmd[:3] == ["/usr/bin/sudo", "chown", "-R"] for cmd in commands)
-    assert any(cmd[:3] == ["/usr/bin/sudo", "umount", "-R"] for cmd in commands)
+    assert any(cmd[:3] == ["/usr/bin/sudo", "umount", "-l"] for cmd in commands)
+    assert not any("--rbind" in cmd for cmd in commands)
+    assert not any(cmd[:3] == ["/usr/bin/sudo", "umount", "-R"] for cmd in commands)
 
 
 def test_install_debian_systemd_packages_requires_sudo_for_non_root(tmp_path, monkeypatch):
@@ -339,6 +347,40 @@ def test_install_debian_systemd_packages_requires_sudo_for_non_root(tmp_path, mo
         assert "sudo was not found" in str(e)
     else:
         raise AssertionError("expected OciImportError")
+
+
+def test_copy_boot_asset_uses_sudo_when_source_is_not_readable(tmp_path, monkeypatch):
+    source = tmp_path / "initramfs.img"
+    target = tmp_path / "boot" / "initramfs.img"
+    source.write_text("initrd")
+    commands = []
+
+    def fake_copy2(source, target):
+        raise PermissionError()
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd[:2] == ["/usr/bin/sudo", "cp"]:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source.read_text())
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.os, "getgid", lambda: 1000)
+    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: "/usr/bin/sudo" if tool == "sudo" else None)
+    monkeypatch.setattr(oci_import.shutil, "copy2", fake_copy2)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
+
+    copy_boot_asset(source, target)
+
+    assert target.read_text() == "initrd"
+    assert any(cmd[:3] == ["/usr/bin/sudo", "cp", "-a"] for cmd in commands)
+    assert any(cmd[:2] == ["/usr/bin/sudo", "chown"] for cmd in commands)
 
 
 def test_set_root_empty_password_unlocks_shadow_and_pam(tmp_path):
@@ -393,6 +435,37 @@ def test_kernel_release_from_initrd_uses_lsinitcpio(tmp_path, monkeypatch):
     monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
 
     assert kernel_release_from_initrd(str(initrd)) == "7.0.14-arch1-1"
+
+
+def test_kernel_release_from_initrd_retries_with_sudo(tmp_path, monkeypatch):
+    initrd = tmp_path / "initramfs.img"
+    initrd.write_text("")
+    commands = []
+
+    def fake_which(tool):
+        if tool in ("lsinitcpio", "sudo"):
+            return "/usr/bin/" + tool
+        return None
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+
+        class Result:
+            returncode = 1
+            stdout = ""
+
+        if cmd[:2] == ["/usr/bin/sudo", "lsinitcpio"]:
+            Result.returncode = 0
+            Result.stdout = "usr/lib/modules/7.1.2-arch3-1/kernel/drivers/net/virtio_net.ko.zst\n"
+        return Result()
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.shutil, "which", fake_which)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
+
+    assert kernel_release_from_initrd(str(initrd)) == "7.1.2-arch3-1"
+    assert commands[0] == ["lsinitcpio", "-l", str(initrd)]
+    assert commands[1] == ["/usr/bin/sudo", "lsinitcpio", "-l", str(initrd)]
 
 
 def test_copy_kernel_modules_copies_matching_module_tree(tmp_path):
