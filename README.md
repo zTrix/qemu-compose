@@ -38,7 +38,7 @@ Example 2: download and bring up qemu vm with ubuntu cloudimg disk file, run a i
 
 
 ```
-$ cd ./script/ubuntu-cloudimg__amd64/
+$ cd ./examples/ubuntu-cloudimg__amd64/
 $ qemu-compose up
 ```
 
@@ -122,7 +122,7 @@ $ qemu-compose pull \
     --kernel /boot/vmlinuz-linux \
     --initrd /boot/initramfs-linux.img \
     --disk-size 2G \
-    registry-mirrors.dev.in.chaitin.net/library/archlinux:latest
+    dockerproxy.net/library/archlinux:latest
 ```
 
 In systemd mode, qemu-compose prepares the rootfs for a normal serial-console VM boot:
@@ -156,7 +156,7 @@ $ qemu-compose pull \
     --root-password testpass \
     --kernel /boot/vmlinuz-linux \
     --initrd /boot/initramfs-linux.img \
-    registry-mirrors.dev.in.chaitin.net/library/archlinux:latest
+    dockerproxy.net/library/archlinux:latest
 ```
 
 `--empty-root-password` is also accepted explicitly, but it cannot be used together with `--root-password`.
@@ -230,7 +230,7 @@ Examples:
 $ qemu-compose down my-vm
 
 # Use config file to auto-detect instance name
-$ cd ./script/ubuntu-cloudimg__amd64/
+$ cd ./examples/ubuntu-cloudimg__amd64/
 $ qemu-compose down
 
 # Use specified config file
