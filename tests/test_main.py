@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from qemu_compose import main
 
 
@@ -48,3 +50,44 @@ def test_down_requires_current_compose_file(monkeypatch, capsys):
 
     assert main.command_down([]) == 1
     assert "qemu-compose.yml not found" in capsys.readouterr().err
+
+
+def test_cli_global_file_before_down(monkeypatch):
+    calls = []
+
+    def fake_command_down(rest, config_path=None):
+        calls.append((rest, config_path))
+        return 0
+
+    monkeypatch.setattr(main, "command_down", fake_command_down)
+    monkeypatch.setattr("sys.argv", ["qemu-compose", "-f", "custom.yml", "down"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.cli()
+
+    assert exc_info.value.code == 0
+    assert calls == [([], "custom.yml")]
+
+
+def test_cli_help_before_command_shows_top_level_help(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["qemu-compose", "-h", "down"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.cli()
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "qemu-compose [OPTIONS] COMMAND" in out
+    assert "Commands:" in out
+
+
+def test_cli_help_after_command_shows_subcommand_help(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["qemu-compose", "down", "-h"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.cli()
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "usage: qemu-compose down" in out
+    assert "Stop and remove" in out

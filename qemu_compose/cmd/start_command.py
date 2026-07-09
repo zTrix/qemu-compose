@@ -50,11 +50,10 @@ def command_start(*, identifier: str = None, config_path: Optional[str] = None) 
     instance_root = store.instance_root
 
     vmid = candidates = config = None
+    ids = _list_vmids(instance_root)
+    name_index = _build_name_index(instance_root)
 
     if identifier:
-        ids = _list_vmids(instance_root)
-        name_index = _build_name_index(instance_root)
-
         vmid, candidates = _resolve_identifier(identifier, ids, name_index)
 
     if config_path:

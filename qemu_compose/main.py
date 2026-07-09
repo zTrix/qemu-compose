@@ -19,7 +19,7 @@ def version(short=False):
     else:
         print("qemu-compose version %s" % version, file=sys.stderr)
 
-def command_down(rest: list[str]) -> int:
+def command_down(rest: list[str], config_path: str | None = None) -> int:
     import argparse as _argparse
     down_parser = _argparse.ArgumentParser(
         prog="qemu-compose down",
@@ -27,7 +27,7 @@ def command_down(rest: list[str]) -> int:
         description="Stop and remove the VM instance defined by qemu-compose.yml in the current directory",
     )
     down_parser.parse_args(rest)
-    config_path = guess_conf_path(None)
+    config_path = guess_conf_path(config_path)
     if not config_path:
         print("qemu-compose.yml not found", file=sys.stderr)
         return 1
@@ -59,6 +59,46 @@ def command_rm(rest: list[str]) -> int:
     from .cmd.down_command import command_down as _command_down
     return _command_down(identifier=rm_args.identifier, force=rm_args.force, stop_running=False)
 
+
+def split_global_args(argv: list[str]) -> tuple[list[str], str | None, list[str]]:
+    global_args = []
+    i = 0
+
+    while i < len(argv):
+        arg = argv[i]
+
+        if arg == "--":
+            if i + 1 < len(argv):
+                return global_args, argv[i + 1], argv[i + 2:]
+            return global_args, None, []
+
+        if arg in ("-h", "--help"):
+            global_args.append(arg)
+            return global_args, None, argv[i + 1:]
+
+        if arg in ("-f", "--file"):
+            global_args.append(arg)
+            if i + 1 < len(argv):
+                global_args.append(argv[i + 1])
+                i += 2
+                continue
+            i += 1
+            continue
+
+        if arg.startswith("--file="):
+            global_args.append(arg)
+            i += 1
+            continue
+
+        if arg.startswith("-"):
+            global_args.append(arg)
+            i += 1
+            continue
+
+        return global_args, arg, argv[i + 1:]
+
+    return global_args, None, []
+
 def cli():
     import argparse
     parser = argparse.ArgumentParser(
@@ -83,25 +123,16 @@ def cli():
     )
     parser.add_argument("-v", "--version", action="store_true", help="Show the qemu-compose version information")
     parser.add_argument("--short", action="store_true", default=False, help="Shows only qemu-compose's version number")
-    parser.add_argument('command', type=str, nargs='?', help='command to run')
-    
-    # Check for subcommand help before parse_known_args
-    help_flag = None
-    if '--help' in sys.argv:
-        help_flag = '--help'
-    elif '-h' in sys.argv:
-        help_flag = '-h'
-    
-    if help_flag:
-        # Remove from sys.argv temporarily to let subcommand parser handle it
-        sys.argv.remove(help_flag)
-    
-    # Parse only known top-level args, leave subcommand options for later
-    args, rest = parser.parse_known_args()
-    
-    # Restore help flag for subcommand parser
-    if help_flag:
-        rest.append(help_flag)
+    parser.add_argument(
+        "-f",
+        "--file",
+        type=str,
+        help="Compose configuration file",
+    )
+
+    global_argv, command, rest = split_global_args(sys.argv[1:])
+    args = parser.parse_args(global_argv)
+    args.command = command
 
     if args.command == "version" or (args.version and not args.command):
         version(short=args.short)
@@ -118,18 +149,13 @@ def cli():
             description="Create and start QEMU vm",
         )
         sub_parser.add_argument(
-            "-f", "--file",
-            type=str,
-            help="Compose configuration files",
-        )
-        sub_parser.add_argument(
             "--project-directory",
             type=str,
             help="Specify an alternate working directory (default: the path of the Compose file)",
         )
         sub_args = sub_parser.parse_args(rest)
 
-        conf_path = guess_conf_path(sub_args.file)
+        conf_path = guess_conf_path(args.file)
         if not conf_path:
             print("qemu-compose.yml not found", file=sys.stderr)
             sys.exit(1)
@@ -161,7 +187,7 @@ def cli():
 
         from .cmd.ssh_command import command_ssh
 
-        config_path = guess_conf_path(None)
+        config_path = guess_conf_path(args.file)
         sys.exit(command_ssh(identifier=ssh_args.identifier, passthrough=ssh_args.command, config_path=config_path))
     elif args.command == "ps":
         import argparse as _argparse
@@ -323,16 +349,10 @@ def cli():
             nargs='?',
             help="Instance ID, unique prefix, or assigned name",
         )
-        start_parser.add_argument(
-            "-f", "--file",
-            type=str,
-            required=False,
-            help="Compose configuration file to parse for QEMU args",
-        )
         start_args = start_parser.parse_args(rest)
 
         from .cmd.start_command import command_start
-        sys.exit(command_start(identifier=start_args.identifier, config_path=start_args.file))
+        sys.exit(command_start(identifier=start_args.identifier, config_path=args.file))
     elif args.command == "stop":
         import argparse as _argparse
         stop_parser = _argparse.ArgumentParser(
@@ -350,7 +370,7 @@ def cli():
         from .cmd.stop_command import command_stop
         sys.exit(command_stop(identifier=stop_args.identifier))
     elif args.command == "down":
-        sys.exit(command_down(rest))
+        sys.exit(command_down(rest, config_path=args.file))
     elif args.command == "rm":
         sys.exit(command_rm(rest))
     elif args.command == "tag":
