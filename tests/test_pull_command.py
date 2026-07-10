@@ -21,10 +21,12 @@ from qemu_compose.image.oci_import import (
     kernel_release_from_image,
     make_rootfs_tar,
     normalize_repo_tag,
+    path_exists,
     set_root_empty_password,
     set_root_password_hash,
     unpack_oci_image,
     write_manifest as write_import_manifest,
+    write_rootfs_text,
 )
 
 
@@ -153,6 +155,42 @@ def test_init_exec_line_uses_cttyhack_when_available():
     assert "exec /bin/sh" in script
 
 
+def test_path_exists_resolves_absolute_symlinks_inside_rootfs(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "bin").mkdir(parents=True)
+    (rootfs / "bin" / "apt-get").write_text("")
+    (rootfs / "usr").mkdir()
+    (rootfs / "usr" / "bin").symlink_to("/bin")
+
+    assert path_exists(rootfs, "/usr/bin/apt-get") is True
+    assert path_exists(rootfs, "/usr/bin/missing") is False
+
+
+def test_write_rootfs_text_falls_back_to_rootless_writer(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    target = rootfs / "etc" / "machine-id"
+    target.parent.mkdir(parents=True)
+    target.write_text("old\n")
+    calls = []
+    original_write_text = Path.write_text
+
+    def fake_write_text(self, content, *args, **kwargs):
+        if self == target:
+            raise PermissionError()
+        return original_write_text(self, content, *args, **kwargs)
+
+    def fake_rootless_write(rootfs_arg, path_arg, content_arg):
+        calls.append((rootfs_arg, path_arg, content_arg))
+
+    monkeypatch.setattr(Path, "write_text", fake_write_text)
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import, "write_rootfs_text_rootless", fake_rootless_write)
+
+    write_rootfs_text(rootfs, "/etc/machine-id", "")
+
+    assert calls == [(rootfs, "/etc/machine-id", "")]
+
+
 def test_manifest_disables_encrypt_hook(tmp_path):
     image_dir = tmp_path / "image"
     image_dir.mkdir()
@@ -278,6 +316,23 @@ def test_configure_systemd_rootfs_supports_debian_systemd_layout(tmp_path):
     ).readlink() == Path("/lib/systemd/system/console-getty.service")
 
 
+def test_configure_systemd_rootfs_writes_machine_id_symlink_inside_rootfs(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    unit_dir = rootfs / "usr" / "lib" / "systemd" / "system"
+    unit_dir.mkdir(parents=True)
+    (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
+    dbus_dir = rootfs / "var" / "lib" / "dbus"
+    dbus_dir.mkdir(parents=True)
+    (dbus_dir / "machine-id").write_text("old\n")
+    etc_dir = rootfs / "etc"
+    etc_dir.mkdir()
+    (etc_dir / "machine-id").symlink_to("/var/lib/dbus/machine-id")
+
+    configure_systemd_rootfs(rootfs)
+
+    assert (dbus_dir / "machine-id").read_text() == ""
+
+
 def test_configure_systemd_rootfs_requires_systemd(tmp_path):
     rootfs = tmp_path / "rootfs"
     rootfs.mkdir()
@@ -290,7 +345,7 @@ def test_configure_systemd_rootfs_requires_systemd(tmp_path):
         raise AssertionError("expected OciImportError")
 
 
-def test_install_debian_systemd_packages_uses_sudo_when_not_root(tmp_path, monkeypatch):
+def test_install_debian_systemd_packages_chroot_sets_private_dev_without_sudo(tmp_path, monkeypatch):
     rootfs = tmp_path / "rootfs"
     (rootfs / "usr" / "bin").mkdir(parents=True)
     (rootfs / "usr" / "bin" / "apt-get").write_text("")
@@ -300,9 +355,15 @@ def test_install_debian_systemd_packages_uses_sudo_when_not_root(tmp_path, monke
 
     def fake_run_cmd(cmd, **kwargs):
         commands.append(cmd)
-        target = Path(cmd[-1])
-        marker = target / ".mounted"
-        marker.write_text("")
+        if cmd[:2] == ["mount", "--bind"]:
+            return
+        if "mount" in cmd:
+            target = Path(cmd[-1])
+            target.mkdir(parents=True, exist_ok=True)
+            if target.is_dir():
+                (target / ".mounted").write_text("")
+        elif "install" in cmd:
+            Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
 
     def fake_subprocess_run(cmd, **kwargs):
         commands.append(cmd)
@@ -312,28 +373,151 @@ def test_install_debian_systemd_packages_uses_sudo_when_not_root(tmp_path, monke
 
         if cmd[:2] == ["mountpoint", "-q"]:
             return Result()
-        if cmd[:2] == ["/usr/bin/sudo", "chroot"] and "install" in cmd:
+        if cmd[:1] == ["chroot"] and "install" in cmd:
+            (rootfs / "usr" / "lib" / "systemd").mkdir(parents=True)
+            (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
+        if cmd[:3] == ["chown", "-R", "0:0"]:
+            Result.returncode = 0
+            return Result()
+        Result.returncode = 0
+        return Result()
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(oci_import, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_subprocess_run)
+
+    assert oci_import.install_debian_systemd_packages(rootfs) is True
+    assert any(cmd[:3] == ["mount", "-t", "tmpfs"] and str(rootfs / "dev") in cmd for cmd in commands)
+    assert any(
+        cmd[:3] == ["mount", "-t", "devpts"]
+        and "newinstance,gid=5,mode=620,ptmxmode=666" in cmd
+        for cmd in commands
+    )
+    assert any(cmd[:2] == ["mount", "--bind"] and str(rootfs / "dev" / "null") in cmd for cmd in commands)
+    assert any(cmd[:1] == ["chroot"] for cmd in commands)
+    assert any(cmd[:1] == ["chroot"] and "APT::Sandbox::User=root" in cmd for cmd in commands)
+    assert any(cmd[:1] == ["chroot"] and "kmod" in cmd for cmd in commands)
+    assert any(cmd[:1] == ["chroot"] and "udev" in cmd for cmd in commands)
+    assert any(cmd[:1] == ["umount"] for cmd in commands)
+    assert not any(cmd and cmd[0].endswith("sudo") for cmd in commands)
+    assert not any("devtmpfs" in cmd for cmd in commands)
+    assert not any("mknod" in cmd for cmd in commands)
+    assert not any("--rbind" in cmd for cmd in commands)
+    assert not any(cmd[:2] == ["umount", "-R"] for cmd in commands)
+    assert not any(cmd[:2] == ["umount", "-l"] for cmd in commands)
+    assert not any(cmd[:3] == ["chown", "-R", "0:0"] for cmd in commands)
+
+
+def test_install_debian_systemd_packages_restores_namespace_ownership(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "usr" / "bin").mkdir(parents=True)
+    (rootfs / "usr" / "bin" / "apt-get").write_text("")
+    (rootfs / "etc").mkdir()
+    commands = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd[:2] == ["mount", "--bind"]:
+            return
+        if "mount" in cmd:
+            Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+        elif "install" in cmd:
+            Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+
+    def fake_subprocess_run(cmd, **kwargs):
+        commands.append(cmd)
+
+        class Result:
+            returncode = 1
+
+        if cmd[:2] == ["mountpoint", "-q"]:
+            return Result()
+        if cmd[:1] == ["chroot"] and "install" in cmd:
             (rootfs / "usr" / "lib" / "systemd").mkdir(parents=True)
             (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
         Result.returncode = 0
         return Result()
 
-    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
-    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: "/usr/bin/sudo" if tool == "sudo" else None)
+    monkeypatch.setattr(oci_import, "running_in_user_namespace", lambda: True)
     monkeypatch.setattr(oci_import, "run_cmd", fake_run_cmd)
     monkeypatch.setattr(oci_import.subprocess, "run", fake_subprocess_run)
 
+    assert oci_import._install_debian_systemd_packages_chroot(rootfs) is True
+    assert any(cmd[:3] == ["chown", "-R", "0:0"] and str(rootfs) in cmd for cmd in commands)
+
+
+def test_install_debian_systemd_packages_uses_unshare_when_not_root(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "usr" / "bin").mkdir(parents=True)
+    (rootfs / "usr" / "bin" / "apt-get").write_text("")
+    commands = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd[:2] == ["unshare", "--user"] and "--map-users" in cmd:
+            (rootfs / "usr" / "lib" / "systemd").mkdir(parents=True)
+            (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.os, "getegid", lambda: 100)
+    monkeypatch.setattr(oci_import.pwd, "getpwuid", lambda uid: type("Pw", (), {"pw_name": "alice"})())
+    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: f"/usr/bin/{tool}")
+    monkeypatch.setattr(
+        oci_import,
+        "_subid_entry",
+        lambda path, username: (100000, 65536) if path.name == "subuid" else (200000, 65536),
+    )
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
+
     assert oci_import.install_debian_systemd_packages(rootfs) is True
-    assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] for cmd in commands)
-    assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] and "kmod" in cmd for cmd in commands)
-    assert any(cmd[:2] == ["/usr/bin/sudo", "chroot"] and "udev" in cmd for cmd in commands)
-    assert any(cmd[:3] == ["/usr/bin/sudo", "chown", "-R"] for cmd in commands)
-    assert any(cmd[:3] == ["/usr/bin/sudo", "umount", "-l"] for cmd in commands)
-    assert not any("--rbind" in cmd for cmd in commands)
-    assert not any(cmd[:3] == ["/usr/bin/sudo", "umount", "-R"] for cmd in commands)
+    unshare_cmd = commands[0]
+    assert unshare_cmd[:2] == ["unshare", "--user"]
+    assert "--map-auto" not in unshare_cmd
+    assert "0:1000:1" in unshare_cmd
+    assert "1:100000:65536" in unshare_cmd
+    assert "0:100:1" in unshare_cmd
+    assert "1:200000:65536" in unshare_cmd
+    assert "--setuid" in unshare_cmd
+    assert "--setgid" in unshare_cmd
+    assert "--mount" in unshare_cmd
+    assert "--pid" in unshare_cmd
+    assert "--fork" in unshare_cmd
+    assert not any(cmd and cmd[0].endswith("sudo") for cmd in commands)
 
 
-def test_install_debian_systemd_packages_requires_sudo_for_non_root(tmp_path, monkeypatch):
+def test_install_debian_systemd_packages_falls_back_to_single_id_mapping(tmp_path, monkeypatch):
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "usr" / "bin").mkdir(parents=True)
+    (rootfs / "usr" / "bin" / "apt-get").write_text("")
+    commands = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd[:4] == ["unshare", "--user", "--map-root-user", "--mount"]:
+            (rootfs / "usr" / "lib" / "systemd").mkdir(parents=True)
+            (rootfs / "usr" / "lib" / "systemd" / "systemd").write_text("")
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(oci_import.pwd, "getpwuid", lambda uid: type("Pw", (), {"pw_name": "alice"})())
+    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: "/usr/bin/unshare" if tool == "unshare" else None)
+    monkeypatch.setattr(oci_import, "_subid_entry", lambda path, username: None)
+    monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
+
+    assert oci_import.install_debian_systemd_packages(rootfs) is True
+    assert any(cmd[:4] == ["unshare", "--user", "--map-root-user", "--mount"] for cmd in commands)
+
+
+def test_install_debian_systemd_packages_requires_unshare_for_non_root(tmp_path, monkeypatch):
     rootfs = tmp_path / "rootfs"
     (rootfs / "usr" / "bin").mkdir(parents=True)
     (rootfs / "usr" / "bin" / "apt-get").write_text("")
@@ -344,43 +528,27 @@ def test_install_debian_systemd_packages_requires_sudo_for_non_root(tmp_path, mo
     try:
         oci_import.install_debian_systemd_packages(rootfs)
     except OciImportError as e:
-        assert "sudo was not found" in str(e)
+        assert "missing required command(s): unshare" in str(e)
     else:
         raise AssertionError("expected OciImportError")
 
 
-def test_copy_boot_asset_uses_sudo_when_source_is_not_readable(tmp_path, monkeypatch):
+def test_copy_boot_asset_reports_permission_error_without_sudo(tmp_path, monkeypatch):
     source = tmp_path / "initramfs.img"
     target = tmp_path / "boot" / "initramfs.img"
     source.write_text("initrd")
-    commands = []
 
     def fake_copy2(source, target):
         raise PermissionError()
 
-    def fake_run(cmd, **kwargs):
-        commands.append(cmd)
-        if cmd[:2] == ["/usr/bin/sudo", "cp"]:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(source.read_text())
-
-        class Result:
-            returncode = 0
-
-        return Result()
-
-    monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
-    monkeypatch.setattr(oci_import.os, "getuid", lambda: 1000)
-    monkeypatch.setattr(oci_import.os, "getgid", lambda: 1000)
-    monkeypatch.setattr(oci_import.shutil, "which", lambda tool: "/usr/bin/sudo" if tool == "sudo" else None)
     monkeypatch.setattr(oci_import.shutil, "copy2", fake_copy2)
-    monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
 
-    copy_boot_asset(source, target)
-
-    assert target.read_text() == "initrd"
-    assert any(cmd[:3] == ["/usr/bin/sudo", "cp", "-a"] for cmd in commands)
-    assert any(cmd[:2] == ["/usr/bin/sudo", "chown"] for cmd in commands)
+    try:
+        copy_boot_asset(source, target)
+    except OciImportError as e:
+        assert "without root privileges" in str(e)
+    else:
+        raise AssertionError("expected OciImportError")
 
 
 def test_set_root_empty_password_unlocks_shadow_and_pam(tmp_path):
@@ -437,7 +605,7 @@ def test_kernel_release_from_initrd_uses_lsinitcpio(tmp_path, monkeypatch):
     assert kernel_release_from_initrd(str(initrd)) == "7.0.14-arch1-1"
 
 
-def test_kernel_release_from_initrd_retries_with_sudo(tmp_path, monkeypatch):
+def test_kernel_release_from_initrd_does_not_retry_with_sudo(tmp_path, monkeypatch):
     initrd = tmp_path / "initramfs.img"
     initrd.write_text("")
     commands = []
@@ -454,18 +622,14 @@ def test_kernel_release_from_initrd_retries_with_sudo(tmp_path, monkeypatch):
             returncode = 1
             stdout = ""
 
-        if cmd[:2] == ["/usr/bin/sudo", "lsinitcpio"]:
-            Result.returncode = 0
-            Result.stdout = "usr/lib/modules/7.1.2-arch3-1/kernel/drivers/net/virtio_net.ko.zst\n"
         return Result()
 
     monkeypatch.setattr(oci_import.os, "geteuid", lambda: 1000)
     monkeypatch.setattr(oci_import.shutil, "which", fake_which)
     monkeypatch.setattr(oci_import.subprocess, "run", fake_run)
 
-    assert kernel_release_from_initrd(str(initrd)) == "7.1.2-arch3-1"
-    assert commands[0] == ["lsinitcpio", "-l", str(initrd)]
-    assert commands[1] == ["/usr/bin/sudo", "lsinitcpio", "-l", str(initrd)]
+    assert kernel_release_from_initrd(str(initrd)) is None
+    assert commands == [["lsinitcpio", "-l", str(initrd)]]
 
 
 def test_copy_kernel_modules_copies_matching_module_tree(tmp_path):
