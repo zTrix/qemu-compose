@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -10,7 +11,7 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 BOOT_CONTAINER = "container"
 BOOT_SYSTEMD = "systemd"
@@ -167,9 +168,43 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content)
 
 
+def resolve_rootfs_path(rootfs: Path, path: str) -> Path:
+    current = rootfs
+    pending = list(Path(path.lstrip("/")).parts)
+    seen: set[Path] = set()
+
+    while pending:
+        current = current / pending.pop(0)
+        if not current.is_symlink():
+            continue
+        if current in seen:
+            break
+        seen.add(current)
+        target = current.readlink()
+        target_parts = list(target.parts)
+        if target.is_absolute():
+            current = rootfs
+            pending = target_parts[1:] + pending
+        else:
+            current = current.parent
+            pending = target_parts + pending
+    return current
+
+
 def path_exists(rootfs: Path, path: str) -> bool:
-    candidate = rootfs / path.lstrip("/")
+    candidate = resolve_rootfs_path(rootfs, path)
     return candidate.exists() or candidate.is_symlink()
+
+
+def write_rootfs_text(rootfs: Path, path: str, content: str) -> None:
+    target = resolve_rootfs_path(rootfs, path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.write_text(content)
+    except PermissionError:
+        if os.geteuid() == 0:
+            raise
+        write_rootfs_text_rootless(rootfs, path, content)
 
 
 def systemd_binary_path(rootfs: Path) -> Optional[str]:
@@ -182,6 +217,13 @@ def systemd_binary_path(rootfs: Path) -> Optional[str]:
 def systemd_unit_path(rootfs: Path, unit_name: str) -> Optional[str]:
     for directory in ("/usr/lib/systemd/system", "/lib/systemd/system", "/etc/systemd/system"):
         path = f"{directory}/{unit_name}"
+        if path_exists(rootfs, path):
+            return path
+    return None
+
+
+def apt_get_path(rootfs: Path) -> Optional[str]:
+    for path in ("/usr/bin/apt-get", "/bin/apt-get"):
         if path_exists(rootfs, path):
             return path
     return None
@@ -204,57 +246,185 @@ def enable_systemd_unit(rootfs: Path, unit_name: str, target: str = "multi-user.
     return True
 
 
-def sudo_prefix(use_sudo: bool) -> List[str]:
-    if not use_sudo:
-        return []
-    sudo = shutil.which("sudo")
-    if sudo is None:
-        raise OciImportError("systemd boot requested, but systemd is missing and sudo was not found")
-    return [sudo]
-
-
-def chroot_run(rootfs: Path, cmd: List[str], *, use_sudo: bool = False) -> None:
-    res = subprocess.run([*sudo_prefix(use_sudo), "chroot", str(rootfs), *cmd], text=True)
+def chroot_run(rootfs: Path, cmd: List[str]) -> None:
+    res = subprocess.run(["chroot", str(rootfs), *cmd], text=True)
     if res.returncode != 0:
         raise OciImportError("command failed in rootfs: " + " ".join(cmd))
 
 
-def mount_chroot_runtime(rootfs: Path, *, use_sudo: bool = False) -> List[Path]:
+def _run_mount_cmd(cmd: List[str]) -> None:
+    run_cmd(cmd)
+
+
+def running_in_user_namespace() -> bool:
+    try:
+        first_line = Path("/proc/self/uid_map").read_text().splitlines()[0]
+    except (OSError, IndexError):
+        return False
+    parts = first_line.split()
+    if len(parts) < 3:
+        return False
+    return parts[:3] != ["0", "0", "4294967295"]
+
+
+def _setup_chroot_dev(rootfs: Path) -> List[Path]:
+    dev = rootfs / "dev"
     mounted: List[Path] = []
-    mounts = [
-        (["mount", "-t", "proc", "proc"], rootfs / "proc"),
-        (["mount", "-t", "sysfs", "sysfs"], rootfs / "sys"),
-        (["mount", "-t", "devtmpfs", "devtmpfs"], rootfs / "dev"),
-        (["mount", "-t", "devpts", "devpts", "-o", "gid=5,mode=620,ptmxmode=666"], rootfs / "dev" / "pts"),
-    ]
-    for cmd, target in mounts:
-        target.mkdir(parents=True, exist_ok=True)
-        if subprocess.run(["mountpoint", "-q", str(target)]).returncode == 0:
+    for directory, mode in (("pts", "755"), ("shm", "1777")):
+        _run_mount_cmd(["install", "-d", "-m", mode, str(dev / directory)])
+
+    for name in ("null", "zero", "full", "random", "urandom", "tty", "console"):
+        source = Path("/dev") / name
+        if not source.exists():
             continue
-        run_cmd([*sudo_prefix(use_sudo), *cmd, str(target)])
+        target = dev / name
+        target.touch(exist_ok=True)
+        _run_mount_cmd(["mount", "--bind", str(source), str(target)])
         mounted.append(target)
+
+    links = {
+        "fd": "/proc/self/fd",
+        "stdin": "/proc/self/fd/0",
+        "stdout": "/proc/self/fd/1",
+        "stderr": "/proc/self/fd/2",
+        "ptmx": "pts/ptmx",
+    }
+    for name, target in links.items():
+        link = dev / name
+        if not link.exists() and not link.is_symlink():
+            link.symlink_to(target)
     return mounted
 
 
-def unmount_chroot_runtime(mounted: List[Path], *, use_sudo: bool = False) -> None:
+def mount_chroot_runtime(rootfs: Path) -> List[Path]:
+    mounted: List[Path] = []
+    try:
+        mounts = [
+            (["mount", "-t", "proc", "proc"], rootfs / "proc"),
+            (["mount", "-t", "sysfs", "sysfs"], rootfs / "sys"),
+        ]
+        for cmd, target in mounts:
+            target.mkdir(parents=True, exist_ok=True)
+            if subprocess.run(["mountpoint", "-q", str(target)]).returncode == 0:
+                continue
+            mount_cmd = [*cmd, str(target)]
+            res = subprocess.run(
+                mount_cmd,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if res.returncode != 0:
+                if cmd[:3] == ["mount", "-t", "sysfs"] and running_in_user_namespace():
+                    print(
+                        "Warning: sysfs mount is not allowed in this user namespace; continuing without /sys",
+                        file=sys.stderr,
+                    )
+                    continue
+                if res.stderr:
+                    print(res.stderr, file=sys.stderr, end="")
+                raise OciImportError("command failed: " + " ".join(mount_cmd))
+            mounted.append(target)
+        dev = rootfs / "dev"
+        dev.mkdir(parents=True, exist_ok=True)
+        if subprocess.run(["mountpoint", "-q", str(dev)]).returncode == 0:
+            return mounted
+        _run_mount_cmd(["mount", "-t", "tmpfs", "-o", "mode=755,size=16m,nosuid", "tmpfs", str(dev)])
+        mounted.append(dev)
+        mounted.extend(_setup_chroot_dev(rootfs))
+        _run_mount_cmd(
+            [
+                "mount",
+                "-t",
+                "devpts",
+                "devpts",
+                "-o",
+                "newinstance,gid=0,mode=620,ptmxmode=666"
+                if running_in_user_namespace()
+                else "newinstance,gid=5,mode=620,ptmxmode=666",
+                str(dev / "pts"),
+            ]
+        )
+        mounted.append(dev / "pts")
+        return mounted
+    except Exception:
+        unmount_chroot_runtime(mounted)
+        raise
+
+
+def unmount_chroot_runtime(mounted: List[Path]) -> None:
+    errors: List[str] = []
     for target in reversed(mounted):
-        subprocess.run([*sudo_prefix(use_sudo), "umount", "-l", str(target)], check=False)
+        res = subprocess.run(["umount", str(target)], check=False, text=True)
+        if res.returncode != 0:
+            errors.append(str(target))
+    if errors:
+        raise OciImportError("failed to unmount chroot runtime filesystem(s): " + ", ".join(errors))
 
 
-def restore_rootfs_write_ownership(rootfs: Path) -> None:
-    uid = os.getuid()
-    gid = os.getgid()
-    res = subprocess.run([*sudo_prefix(True), "chown", "-R", f"{uid}:{gid}", str(rootfs)], text=True)
+def _decode_mountinfo_path(value: str) -> str:
+    return value.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\")
+
+
+def mounted_paths_under(path: Path) -> List[Path]:
+    root = path.resolve()
+    mounts: List[Path] = []
+    try:
+        with Path("/proc/self/mountinfo").open() as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                mount_point = Path(_decode_mountinfo_path(parts[4]))
+                try:
+                    mount_point.relative_to(root)
+                except ValueError:
+                    continue
+                mounts.append(mount_point)
+    except OSError:
+        return []
+    mounts.sort(key=lambda item: len(item.parts), reverse=True)
+    return mounts
+
+
+def cleanup_workdir(work_parent: Path) -> None:
+    mounts = mounted_paths_under(work_parent)
+    if mounts:
+        print(
+            "Warning: workdir still contains mounted filesystems; attempting cleanup before removal",
+            file=sys.stderr,
+        )
+    failed: List[str] = []
+    for mount_point in mounts:
+        res = subprocess.run(
+            ["umount", str(mount_point)],
+            check=False,
+            text=True,
+        )
+        if res.returncode != 0:
+            failed.append(str(mount_point))
+    if failed:
+        print(
+            "Warning: keeping workdir because mounted filesystem(s) could not be unmounted: " + ", ".join(failed),
+            file=sys.stderr,
+        )
+        print(f"Kept workdir: {work_parent}", file=sys.stderr)
+        return
+    shutil.rmtree(work_parent, ignore_errors=True)
+
+
+def restore_rootfs_namespace_ownership(rootfs: Path) -> None:
+    res = subprocess.run(["chown", "-R", "0:0", str(rootfs)], check=False, text=True)
     if res.returncode != 0:
-        raise OciImportError("failed to restore rootfs ownership after Debian/Ubuntu package install")
+        raise OciImportError("failed to restore rootfs ownership after rootless package install")
 
 
-def install_debian_systemd_packages(rootfs: Path) -> bool:
+def _install_debian_systemd_packages_chroot(rootfs: Path) -> bool:
     if systemd_binary_path(rootfs):
         return True
-    if not path_exists(rootfs, "/usr/bin/apt-get"):
+    if not apt_get_path(rootfs):
         return False
-    use_sudo = os.geteuid() != 0
 
     resolv_conf = Path("/etc/resolv.conf")
     if resolv_conf.exists():
@@ -264,15 +434,16 @@ def install_debian_systemd_packages(rootfs: Path) -> bool:
     print("Installing systemd packages into Debian/Ubuntu rootfs", flush=True)
     mounted: List[Path] = []
     try:
-        mounted = mount_chroot_runtime(rootfs, use_sudo=use_sudo)
+        mounted = mount_chroot_runtime(rootfs)
         env = "DEBIAN_FRONTEND=noninteractive"
-        chroot_run(rootfs, ["env", env, "apt-get", "update"], use_sudo=use_sudo)
+        apt_common = ["apt-get", "-o", "APT::Sandbox::User=root"]
+        chroot_run(rootfs, ["env", env, *apt_common, "update"])
         chroot_run(
             rootfs,
             [
                 "env",
                 env,
-                "apt-get",
+                *apt_common,
                 "install",
                 "-y",
                 "--no-install-recommends",
@@ -285,18 +456,149 @@ def install_debian_systemd_packages(rootfs: Path) -> bool:
                 "udev",
                 "openssh-server",
             ],
-            use_sudo=use_sudo,
         )
     finally:
-        unmount_chroot_runtime(mounted, use_sudo=use_sudo)
-        if use_sudo:
-            restore_rootfs_write_ownership(rootfs)
+        unmount_chroot_runtime(mounted)
+        if running_in_user_namespace():
+            restore_rootfs_namespace_ownership(rootfs)
 
     return systemd_binary_path(rootfs) is not None
 
 
+def _subid_entry(path: Path, username: str) -> Optional[Tuple[int, int]]:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        parts = line.split(":")
+        if len(parts) != 3 or parts[0] != username:
+            continue
+        try:
+            start = int(parts[1])
+            count = int(parts[2])
+        except ValueError:
+            return None
+        if count > 0:
+            return start, count
+    return None
+
+
+def _rootless_unshare_args() -> List[str]:
+    require_tools(["unshare"])
+    args = ["unshare", "--user"]
+    try:
+        username = pwd.getpwuid(os.geteuid()).pw_name
+    except KeyError:
+        username = ""
+
+    subuid = _subid_entry(Path("/etc/subuid"), username) if username else None
+    subgid = _subid_entry(Path("/etc/subgid"), username) if username else None
+    if username and shutil.which("newuidmap") and shutil.which("newgidmap") and subuid and subgid:
+        subuid_start, subuid_count = subuid
+        subgid_start, subgid_count = subgid
+        args.extend(
+            [
+                "--map-users",
+                f"0:{os.geteuid()}:1",
+                "--map-users",
+                f"1:{subuid_start}:{subuid_count}",
+                "--map-groups",
+                f"0:{os.getegid()}:1",
+                "--map-groups",
+                f"1:{subgid_start}:{subgid_count}",
+                "--setuid",
+                "0",
+                "--setgid",
+                "0",
+            ]
+        )
+    else:
+        args.append("--map-root-user")
+
+    args.extend(["--mount", "--pid", "--fork"])
+    return args
+
+
+def write_rootfs_text_rootless(rootfs: Path, path: str, content: str) -> None:
+    code = """
+import os
+import sys
+from pathlib import Path
+from qemu_compose.image.oci_import import resolve_rootfs_path
+
+rootfs = Path(sys.argv[1])
+guest_path = sys.argv[2]
+content = sys.stdin.read()
+target = resolve_rootfs_path(rootfs, guest_path)
+target.parent.mkdir(parents=True, exist_ok=True)
+if target.exists() or target.is_symlink():
+    os.chown(target, 0, 0)
+    target.chmod(target.stat().st_mode | 0o600)
+target.write_text(content)
+"""
+    res = subprocess.run(
+        [
+            *_rootless_unshare_args(),
+            sys.executable,
+            "-c",
+            code,
+            str(rootfs),
+            path,
+        ],
+        input=content,
+        text=True,
+    )
+    if res.returncode != 0:
+        raise OciImportError(f"failed to write {path} in rootfs without root privileges")
+
+
+def _install_debian_systemd_packages_rootless(rootfs: Path) -> bool:
+    code = """
+import sys
+from pathlib import Path
+from qemu_compose.image.oci_import import _install_debian_systemd_packages_chroot
+
+try:
+    installed = _install_debian_systemd_packages_chroot(Path(sys.argv[1]))
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0 if installed else 2)
+"""
+    res = subprocess.run(
+        [
+            *_rootless_unshare_args(),
+            sys.executable,
+            "-c",
+            code,
+            str(rootfs),
+        ],
+        text=True,
+    )
+    if res.returncode == 0:
+        return True
+    if res.returncode == 2:
+        return False
+    raise OciImportError("rootless systemd package installation failed")
+
+
+def install_debian_systemd_packages(rootfs: Path) -> bool:
+    if systemd_binary_path(rootfs):
+        return True
+    if not apt_get_path(rootfs):
+        return False
+    if os.geteuid() == 0:
+        return _install_debian_systemd_packages_chroot(rootfs)
+    return _install_debian_systemd_packages_rootless(rootfs)
+
+
 def configure_systemd_rootfs(rootfs: Path) -> None:
     if not install_debian_systemd_packages(rootfs):
+        if not apt_get_path(rootfs):
+            raise OciImportError(
+                "systemd boot requested, but systemd was not found in the image and apt-get was not found to install it"
+            )
         raise OciImportError("systemd boot requested, but systemd was not found in the image")
 
     systemd_path = systemd_binary_path(rootfs)
@@ -308,9 +610,7 @@ def configure_systemd_rootfs(rootfs: Path) -> None:
 
     write_text(rootfs / "etc" / "fstab", "/dev/vda1 / ext4 rw 0 1\n")
 
-    machine_id = rootfs / "etc" / "machine-id"
-    machine_id.parent.mkdir(parents=True, exist_ok=True)
-    machine_id.write_text("")
+    write_rootfs_text(rootfs, "/etc/machine-id", "")
 
     imds_generator = None
     for path in (
@@ -509,17 +809,8 @@ def copy_boot_assets(kernel: str, initrd: str, boot_dir: Path) -> None:
 def copy_boot_asset(source: Path, target: Path) -> None:
     try:
         shutil.copy2(source, target)
-        return
-    except PermissionError:
-        if os.geteuid() == 0:
-            raise
-
-    res = subprocess.run([*sudo_prefix(True), "cp", "-a", str(source), str(target)], text=True)
-    if res.returncode != 0:
-        raise OciImportError(f"failed to copy boot asset: {source}")
-    res = subprocess.run([*sudo_prefix(True), "chown", f"{os.getuid()}:{os.getgid()}", str(target)], text=True)
-    if res.returncode != 0:
-        raise OciImportError(f"failed to restore boot asset ownership: {target}")
+    except PermissionError as e:
+        raise OciImportError(f"failed to copy boot asset without root privileges: {source}") from e
 
 
 def kernel_release_from_image(kernel: str) -> Optional[str]:
@@ -539,16 +830,15 @@ def kernel_release_from_initrd(initrd: str) -> Optional[str]:
     for cmd in tools:
         if shutil.which(cmd[0]) is None:
             continue
-        for prefix in ([], sudo_prefix(True) if os.geteuid() != 0 and shutil.which("sudo") else []):
-            try:
-                res = subprocess.run([*prefix, *cmd], text=True, capture_output=True, check=False)
-            except OSError:
-                continue
-            if res.returncode != 0:
-                continue
-            match = re.search(r"(?:^|/)lib/modules/([^/\s]+)/", res.stdout, re.MULTILINE)
-            if match:
-                return match.group(1)
+        try:
+            res = subprocess.run(cmd, text=True, capture_output=True, check=False)
+        except OSError:
+            continue
+        if res.returncode != 0:
+            continue
+        match = re.search(r"(?:^|/)lib/modules/([^/\s]+)/", res.stdout, re.MULTILINE)
+        if match:
+            return match.group(1)
     return None
 
 
@@ -726,4 +1016,4 @@ def import_oci_image(
         if keep_workdir:
             print(f"Kept workdir: {work_parent}", file=sys.stderr)
         else:
-            shutil.rmtree(work_parent, ignore_errors=True)
+            cleanup_workdir(work_parent)
