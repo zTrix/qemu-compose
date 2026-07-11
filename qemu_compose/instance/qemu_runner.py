@@ -66,6 +66,33 @@ def extract_format_or_default(mapping: Optional[dict], key: str, env: dict, defa
     return default
 
 
+def parse_volume_spec(spec: str) -> Optional[Tuple[str, str, bool]]:
+    parts = [p.strip() for p in spec.split(':')]
+    if len(parts) < 2:
+        return None
+    src = parts[0]
+    dst = parts[1]
+    ro = any(p.lower() == 'ro' for p in parts[2:]) if len(parts) > 2 else False
+    if not src or not dst:
+        return None
+    return src, dst, ro
+
+
+def resolve_volume_source(src: str, base_dir: str) -> str:
+    expanded_src = os.path.expanduser(src)
+    if os.path.isabs(expanded_src):
+        return os.path.normpath(expanded_src)
+    return os.path.normpath(os.path.abspath(os.path.join(base_dir, expanded_src)))
+
+
+def resolve_volume_spec(spec: str, base_dir: str) -> Optional[Tuple[str, str, bool]]:
+    parsed = parse_volume_spec(spec)
+    if not parsed:
+        return None
+    src, dst, ro = parsed
+    return resolve_volume_source(src, base_dir), dst, ro
+
+
 @dataclass(frozen=True)
 class HttpServeConfig:
     listen: str
@@ -457,17 +484,6 @@ class QemuRunner(QEMUMachine):
         # Examples:
         #   /host/path:/mnt/data
         #   /host/path:/mnt/readonly:ro
-        def parse_volume_spec(spec: str) -> Optional[Tuple[str, str, bool]]:
-            parts = [p.strip() for p in spec.split(':')]
-            if len(parts) < 2:
-                return None
-            src = parts[0]
-            dst = parts[1]
-            ro = any(p.lower() == 'ro' for p in parts[2:]) if len(parts) > 2 else False
-            if not src or not dst:
-                return None
-            return src, dst, ro
-
         def volume_tag_for(dst: str, idx: int) -> str:
             base = os.path.basename(dst) or f"vol{idx}"
             sanitized = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in base)
@@ -551,7 +567,7 @@ class QemuRunner(QEMUMachine):
 
         if self.cid:
             args.append("-device")
-            args.append("vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=%d" % self.cid)
+            args.append("vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=%d,disable-legacy=on" % self.cid)
 
         assert self.vmid is not None
         pub_bytes = prepare_ssh_key(self.instance_dir, self.vmid)
@@ -574,7 +590,7 @@ class QemuRunner(QEMUMachine):
         # volumes via virtio-fs and fstab entries
         fstab_entries: List[str] = []
         for i, vol_spec in enumerate(self.config.volumes or []):
-            parsed = parse_volume_spec(vol_spec)
+            parsed = resolve_volume_spec(vol_spec, self.cwd)
             if not parsed:
                 continue
             src, dst, ro = parsed
