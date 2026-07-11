@@ -22,7 +22,7 @@ $ pip install qemu-compose
 
 ## Examples and Screenshot
 
-Example 1: pull archlinux docker image and run archlinux image directly with systemd init just like normal vm boot:
+Example 1: pull archlinux docker image and run archlinux image directly with systemd init just like normal vm boot, with ssh login setup:
 
 ```
 $ qemu-compose pull --boot systemd --kernel /boot/vmlinuz-linux --initrd /boot/initramfs-linux.img --disk-size 256G dockerproxy.net/library/archlinux:latest
@@ -31,7 +31,7 @@ $ qemu-compose run dockerproxy.net/library/archlinux:latest
 
 Demo:
 
-[![asciicast](https://raw.githubusercontent.com/zTrix/qemu-compose/refs/heads/main/assets/1260286.svg)](https://asciinema.org/a/1260286)
+[![asciicast](https://raw.githubusercontent.com/zTrix/qemu-compose/refs/heads/main/assets/1260610.svg)](https://asciinema.org/a/1260610)
 
 
 Example 2: download and bring up qemu vm with ubuntu cloudimg disk file, run a interactive shell
