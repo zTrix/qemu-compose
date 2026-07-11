@@ -567,7 +567,7 @@ class QemuRunner(QEMUMachine):
 
         if self.cid:
             args.append("-device")
-            args.append("vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=%d" % self.cid)
+            args.append("vhost-vsock-pci,id=vhost-vsock-pci0,guest-cid=%d,disable-legacy=on" % self.cid)
 
         assert self.vmid is not None
         pub_bytes = prepare_ssh_key(self.instance_dir, self.vmid)
