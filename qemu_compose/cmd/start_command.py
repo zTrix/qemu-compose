@@ -45,7 +45,13 @@ def _resolve_identifier(token: str, ids: List[str], name_index: Dict[str, str]) 
     return None, matches
 
 
-def command_start(*, identifier: str = None, config_path: Optional[str] = None) -> int:
+def command_start(
+    *,
+    identifier: str = None,
+    config_path: Optional[str] = None,
+    cwd: Optional[str] = None,
+    env_update: Optional[Dict[str, str]] = None,
+) -> int:
     store = LocalStore()
     instance_root = store.instance_root
 
@@ -86,13 +92,12 @@ def command_start(*, identifier: str = None, config_path: Optional[str] = None) 
 
     assert config is not None
 
-    cwd = os.getcwd()
-    vm = QemuRunner(config, store, cwd)
+    vm = QemuRunner(config, store, cwd or os.getcwd())
 
     if (exit_code := vm.check_and_lock()) > 0:
         return exit_code
 
-    vm.prepare_env()
+    vm.prepare_env(env_update=env_update)
 
     if (exit_code := vm.prepare_storage()) > 0:
         return exit_code

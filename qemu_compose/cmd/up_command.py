@@ -6,6 +6,7 @@ from typing import Optional
 
 import yaml
 
+from qemu_compose.cmd.start_command import _build_name_index, command_start
 from qemu_compose.instance.qemu_runner import QemuConfig, QemuRunner
 from qemu_compose.local_store import LocalStore
 from qemu_compose.qemu.machine.machine import AbnormalShutdown
@@ -22,6 +23,16 @@ def command_up(*, config_path: str, project_directory: Optional[str] = None) -> 
         config_obj: dict = yaml.safe_load(f)
 
     config = QemuConfig.from_dict(config_obj)
+
+    if config.name and config.name in _build_name_index(store.instance_root):
+        env_update = {"CWD": project_directory} if project_directory else None
+        return command_start(
+            identifier=config.name,
+            config_path=config_path,
+            cwd=cwd,
+            env_update=env_update,
+        )
+
     vm = QemuRunner(config, store, cwd)
 
     if (exit_code := vm.check_and_lock()) > 0:
