@@ -108,6 +108,7 @@ def cli():
  epilog="""Commands:
   up          Create and start QEMU vm
   ssh         Run ssh with instance key
+  monitor     Connect to the QEMU monitor
   ps          List VM instances
   version     Show the qemu-compose version information
   images      List VM images found in local store
@@ -189,6 +190,26 @@ def cli():
 
         config_path = guess_conf_path(args.file)
         sys.exit(command_ssh(identifier=ssh_args.identifier, passthrough=ssh_args.command, config_path=config_path))
+    elif args.command == "monitor":
+        import argparse as _argparse
+
+        monitor_parser = _argparse.ArgumentParser(
+            prog="qemu-compose monitor",
+            add_help=True,
+            description="Connect to an instance's QEMU monitor",
+        )
+        monitor_parser.add_argument(
+            "identifier",
+            type=str,
+            nargs="?",
+            help="Instance ID, unique prefix, or assigned name",
+        )
+        monitor_args = monitor_parser.parse_args(rest)
+
+        from .cmd.monitor_command import command_monitor
+
+        config_path = guess_conf_path(args.file)
+        sys.exit(command_monitor(identifier=monitor_args.identifier, config_path=config_path))
     elif args.command == "ps":
         import argparse as _argparse
         # Sub-parser for `ps` options to keep scope minimal
