@@ -1,0 +1,12 @@
+image: devbox:archlinux
+name: name
+qemu_args:
+  - m: 8G
+volumes:
+  - ./:/data/
+boot_commands:
+  - read_until: " login: "
+  - write: "root\r"
+  - interact: null
+after_script:
+  - reset -I
