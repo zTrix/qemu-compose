@@ -1,0 +1,8 @@
+image: registry-mirrors.dev.in.chaitin.net/library/alpine:3.20
+name: test-alpine
+qemu_args:
+  - m: 1G
+volumes:
+  - ./:/data/
+after_script:
+  - reset -I
