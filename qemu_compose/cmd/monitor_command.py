@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import sys
-import threading
 from typing import BinaryIO, Optional
 
 from qemu_compose.cmd.ssh_command import (
@@ -14,25 +14,111 @@ from qemu_compose.cmd.ssh_command import (
 from qemu_compose.local_store import LocalStore
 
 
+async def _read_input(input_stream: BinaryIO) -> bytes:
+    """Read stdin without leaving a blocking worker behind on cancellation."""
+    try:
+        fd = input_stream.fileno()
+    except (AttributeError, OSError):
+        # In-memory streams are useful to callers and tests and cannot block.
+        return input_stream.read(65536)
+
+    loop = asyncio.get_running_loop()
+    ready = loop.create_future()
+
+    def read_ready() -> None:
+        if ready.done():
+            return
+        try:
+            ready.set_result(os.read(fd, 65536))
+        except OSError as error:
+            ready.set_exception(error)
+
+    try:
+        loop.add_reader(fd, read_ready)
+    except (NotImplementedError, PermissionError):
+        # epoll cannot watch regular files (for example, redirected stdin),
+        # but reading one cannot wait indefinitely for interactive input.
+        return input_stream.read(65536)
+    try:
+        return await ready
+    finally:
+        loop.remove_reader(fd)
+
+
+async def _relay_monitor_async(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    input_stream: BinaryIO,
+    output_stream: BinaryIO,
+) -> None:
+    async def copy_input() -> None:
+        try:
+            while data := await _read_input(input_stream):
+                writer.write(data)
+                await writer.drain()
+            if writer.can_write_eof():
+                writer.write_eof()
+                await writer.drain()
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
+
+    async def copy_output() -> None:
+        while data := await reader.read(65536):
+            output_stream.write(data)
+            output_stream.flush()
+
+    input_task = asyncio.ensure_future(copy_input())
+    output_task = asyncio.ensure_future(copy_output())
+    try:
+        done, _ = await asyncio.wait(
+            (input_task, output_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if output_task in done:
+            await output_task
+        else:
+            await input_task
+            await output_task
+    finally:
+        for task in (input_task, output_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(input_task, output_task, return_exceptions=True)
+
+
+async def _relay_socket_async(
+    monitor: socket.socket,
+    input_stream: BinaryIO,
+    output_stream: BinaryIO,
+) -> None:
+    reader, writer = await asyncio.open_connection(sock=monitor)
+    try:
+        await _relay_monitor_async(reader, writer, input_stream, output_stream)
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
 def _relay_monitor(
     monitor: socket.socket,
     input_stream: BinaryIO,
     output_stream: BinaryIO,
 ) -> None:
-    def copy_input() -> None:
-        try:
-            while data := input_stream.read(65536):
-                monitor.sendall(data)
-            monitor.shutdown(socket.SHUT_WR)
-        except (BrokenPipeError, OSError):
-            pass
+    """Synchronously expose the asyncio monitor relay to internal callers."""
+    asyncio.run(_relay_socket_async(monitor, input_stream, output_stream))
 
-    input_thread = threading.Thread(target=copy_input, daemon=True)
-    input_thread.start()
 
-    while data := monitor.recv(65536):
-        output_stream.write(data)
-        output_stream.flush()
+async def _connect_monitor_async(
+    socket_path: str,
+    input_stream: BinaryIO,
+    output_stream: BinaryIO,
+) -> None:
+    reader, writer = await asyncio.open_unix_connection(socket_path)
+    try:
+        await _relay_monitor_async(reader, writer, input_stream, output_stream)
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 
 def _connect_monitor(
@@ -40,13 +126,13 @@ def _connect_monitor(
     input_stream: Optional[BinaryIO] = None,
     output_stream: Optional[BinaryIO] = None,
 ) -> None:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as monitor:
-        monitor.connect(socket_path)
-        _relay_monitor(
-            monitor,
+    asyncio.run(
+        _connect_monitor_async(
+            socket_path,
             input_stream or sys.stdin.buffer,
             output_stream or sys.stdout.buffer,
         )
+    )
 
 
 def command_monitor(
