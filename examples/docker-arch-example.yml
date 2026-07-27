@@ -1,0 +1,8 @@
+image: docker.io/library/archlinux:latest
+name: test-archlinux
+qemu_args:
+  - m: 2G
+volumes:
+  - ./:/data/
+after_script:
+  - reset -I
