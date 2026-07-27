@@ -194,7 +194,6 @@ class QemuRunner(QEMUMachine):
         
         super().__init__(binary=binary)
 
-        self.add_monitor_null()
         self.set_qmp_monitor(True)
         self.set_console(console_chardev='socket', device_type='isa-serial')
 
@@ -401,6 +400,7 @@ class QemuRunner(QEMUMachine):
             'accel': 'kvm',
             'm': vm_mem_size,
             'smp': str(os.cpu_count()),
+            'monitor': f'unix:{os.path.join(self.instance_dir, "monitor.sock")},server=on,wait=off',
         }
 
         # image provided args override our defaults

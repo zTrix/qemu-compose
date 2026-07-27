@@ -91,3 +91,20 @@ def test_cli_help_after_command_shows_subcommand_help(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "usage: qemu-compose down" in out
     assert "Stop and remove" in out
+
+
+def test_cli_monitor_dispatches_identifier(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "qemu_compose.cmd.monitor_command.command_monitor",
+        lambda *, identifier=None, config_path=None: calls.append(
+            (identifier, config_path)
+        ) or 0,
+    )
+    monkeypatch.setattr("sys.argv", ["qemu-compose", "monitor", "vm1"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.cli()
+
+    assert exc_info.value.code == 0
+    assert calls == [("vm1", None)]
