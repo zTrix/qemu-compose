@@ -1,0 +1,22 @@
+name: qemu-compose_devbox
+env:
+  image: devbox__archlinux-20251002.0.qcow2
+before_script:
+  - qemu-img create -b {IMAGE_ROOT}/{image} -f qcow2 -F qcow2 {INSTANCE_ROOT}/{ID}/instance.qcow2
+args:
+  - # basic
+    m: 4G
+    bios: /usr/share/ovmf/x64/OVMF.4m.fd    # enable UEFI bios
+    kernel: '{IMAGE_ROOT}/{image}.kernel'
+    append: 'rw root=/dev/vda3 console=ttyS0'
+  - drive: 'file={INSTANCE_ROOT}/{ID}/instance.qcow2,if=virtio'
+  - netdev: 'user,id=user.0'
+  - device: 'virtio-net,netdev=user.0'
+boot_commands:
+  - read_until: " login: "
+  - write: "root\r"
+  - read_until: "\r\nPassword: "
+  - write: "_\r"
+  - interact: null
+after_script:
+  - reset -I
