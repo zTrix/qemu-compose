@@ -23,12 +23,12 @@ continue in the background under the supervisor. `after_script` runs when the VM
 are stored in the instance's `qemu-compose.log`, and detached serial output is
 stored in `console.log`.
 
-When a detached VM's `boot_commands` reaches an `interact` action, startup
-finishes and the serial console is handed to `qemu-compose attach` instead of
-blocking `up -d`. Attach connects the local terminal bidirectionally to the
-guest serial console. Disconnecting with `Ctrl-p`, `Ctrl-q` leaves the VM
-running. If boot commands are still provisioning the guest, `attach` waits and
-connects automatically when provisioning reaches the interactive handoff.
+`qemu-compose attach` connects immediately and mirrors serial output while
+`boot_commands` provision the guest. When the commands reach an `interact`
+action, the same connection becomes a fully interactive console without
+blocking `up -d`. Disconnecting with `Ctrl-p`, `Ctrl-q` leaves the VM running.
+Every attach replays `console.log` from the beginning and then follows live
+serial output, so boot output remains visible even when attaching later.
 
 ## Advantages
 

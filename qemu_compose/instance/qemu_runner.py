@@ -32,6 +32,21 @@ from . import new_random_vmid
 logger = logging.getLogger("qemu-compose.instance.qemu_runner")
 
 
+class _ConsoleLogSink:
+    def __init__(self, runner: "QemuRunner"):
+        self.runner = runner
+
+    def write(self, data) -> int:
+        if isinstance(data, str):
+            data = data.encode()
+        self.runner._publish_console(data)
+        return len(data)
+
+    def flush(self) -> None:
+        if self.runner.console_log_file is not None:
+            self.runner.console_log_file.flush()
+
+
 def create_overlay(base_path: str, base_format: str, overlay_path: str) -> int:
     cmd = [
         "qemu-img", "create",
@@ -188,6 +203,10 @@ class QemuRunner(QEMUMachine):
         self.virtiofs_children: List[subprocess.Popen] = []
         self.console_drain_thread: Optional[threading.Thread] = None
         self.console_server_socket: Optional[socket.socket] = None
+        self.console_clients: Dict[socket.socket, bytearray] = {}
+        self.console_clients_lock = threading.Lock()
+        self.console_log_file = None
+        self.console_read_enabled = False
 
         if config.binary:
             binary = config.binary
@@ -699,7 +718,7 @@ class QemuRunner(QEMUMachine):
             self.term.interact(raw_mode=True)
 
     def start_console_drain(self) -> None:
-        """Drain detached serial output and expose it through attach.sock."""
+        """Expose attach.sock and mirror boot-command console reads."""
         if self.console_drain_thread is not None:
             return
 
@@ -716,70 +735,84 @@ class QemuRunner(QEMUMachine):
         listener.listen(4)
         listener.setblocking(False)
         self.console_server_socket = listener
+        self.console_log_file = open(console_path, "wb", buffering=0)
+        self.term.io.logfile = _ConsoleLogSink(self)
 
         def drain() -> None:
-            clients: Dict[socket.socket, bytearray] = {}
             try:
-                with open(console_path, "ab", buffering=0) as output:
-                    while self.is_running():
+                while self.is_running():
+                    with self.console_clients_lock:
+                        clients = list(self.console_clients)
+                        writers = [
+                            client for client in clients
+                            if self.console_clients.get(client)
+                        ]
+                    readers = [listener, *clients]
+                    if self.console_read_enabled:
+                        readers.append(self.console_file)
+                    try:
+                        readable, writable, _ = select.select(readers, writers, [], 0.2)
+                    except (OSError, ValueError, AttributeError):
+                        break
+
+                    if listener in readable:
                         try:
-                            readers = [listener, self.console_file, *clients]
-                            writers = [client for client, pending in clients.items() if pending]
-                            readable, writable, _ = select.select(readers, writers, [], 0.2)
-                        except (OSError, ValueError, AttributeError):
+                            client, _ = listener.accept()
+                            client.setblocking(False)
+                            with self.console_clients_lock:
+                                try:
+                                    with open(console_path, "rb") as history_file:
+                                        history = history_file.read()
+                                except FileNotFoundError:
+                                    history = b""
+                                self.console_clients[client] = bytearray(history)
+                        except OSError:
+                            pass
+
+                    if self.console_read_enabled and self.console_file in readable:
+                        try:
+                            data = self.console_file.recv(65536)
+                        except OSError:
+                            data = b""
+                        if not data:
                             break
+                        self._publish_console(data)
 
-                        if listener in readable:
-                            try:
-                                client, _ = listener.accept()
-                                client.setblocking(False)
-                                clients[client] = bytearray()
-                            except OSError:
-                                pass
+                    for client in [c for c in readable if c in clients]:
+                        try:
+                            data = client.recv(65536)
+                            if data:
+                                self.console_file.sendall(data)
+                            else:
+                                self._drop_console_client(client)
+                        except OSError:
+                            self._drop_console_client(client)
 
-                        if self.console_file in readable:
-                            try:
-                                data = self.console_file.recv(65536)
-                            except OSError:
-                                data = b""
-                            if not data:
-                                break
-                            output.write(data)
-                            for client, pending in list(clients.items()):
-                                pending.extend(data)
-                                if len(pending) > 1024 * 1024:
-                                    client.close()
-                                    clients.pop(client, None)
-
-                        for client in [c for c in readable if c in clients]:
-                            try:
-                                data = client.recv(65536)
-                                if data:
-                                    self.console_file.sendall(data)
-                                else:
-                                    client.close()
-                                    clients.pop(client, None)
-                            except OSError:
-                                client.close()
-                                clients.pop(client, None)
-
-                        for client in writable:
-                            pending = clients.get(client)
+                    for client in writable:
+                        failed = False
+                        with self.console_clients_lock:
+                            pending = self.console_clients.get(client)
                             if pending is None:
                                 continue
                             try:
                                 sent = client.send(pending)
                                 del pending[:sent]
                             except OSError:
-                                client.close()
-                                clients.pop(client, None)
+                                failed = True
+                        if failed:
+                            self._drop_console_client(client)
             except Exception as e:
                 logger.debug("console drain stopped: %s", e)
             finally:
-                for client in clients:
-                    client.close()
+                with self.console_clients_lock:
+                    for client in self.console_clients:
+                        client.close()
+                    self.console_clients = {}
                 listener.close()
                 self.console_server_socket = None
+                if self.console_log_file is not None:
+                    self.console_log_file.close()
+                    self.console_log_file = None
                 try:
                     os.unlink(attach_path)
                 except FileNotFoundError:
@@ -791,6 +824,29 @@ class QemuRunner(QEMUMachine):
             daemon=True,
         )
         self.console_drain_thread.start()
+
+    def enable_console_drain(self) -> None:
+        self.console_read_enabled = True
+
+    def _publish_console(self, data: bytes) -> None:
+        if not data:
+            return
+        if self.console_log_file is not None:
+            self.console_log_file.write(data)
+        with self.console_clients_lock:
+            for client, pending in list(self.console_clients.items()):
+                pending.extend(data)
+                if len(pending) > 1024 * 1024:
+                    client.close()
+                    self.console_clients.pop(client, None)
+
+    def _drop_console_client(self, client: socket.socket) -> None:
+        with self.console_clients_lock:
+            self.console_clients.pop(client, None)
+        try:
+            client.close()
+        except OSError:
+            pass
 
     def cleanup(self):
         self._load_io_log()
