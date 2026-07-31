@@ -36,14 +36,14 @@ def run_vm_lifecycle(
         vm.start()
         started = True
         if detached:
+            if on_ready is not None:
+                on_ready(vm)
             vm.interact(detached=True)
         else:
             vm.interact()
 
         if detached:
             vm.start_console_drain()
-            if on_ready is not None:
-                on_ready(vm)
 
             while vm.is_running() and not stop_requested:
                 time.sleep(0.2)

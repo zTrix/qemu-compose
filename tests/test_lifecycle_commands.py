@@ -213,10 +213,9 @@ def test_detached_lifecycle_reports_ready_then_waits_and_cleans_up():
 
         def start_console_drain(self):
             calls.append("drain")
+            self.running = False
 
         def is_running(self):
-            if calls and calls[-1] == "ready":
-                self.running = False
             return self.running
 
         def wait(self, timeout=None):
@@ -237,9 +236,9 @@ def test_detached_lifecycle_reports_ready_then_waits_and_cleans_up():
 
     assert calls == [
         "start",
+        "ready",
         ("interact", True),
         "drain",
-        "ready",
         ("wait", None),
         ("script", "after_script"),
         "cleanup",

@@ -18,8 +18,8 @@ $ qemu-compose stop vm1
 
 Detached mode keeps a small per-instance supervisor process alive to own the
 QMP and serial connections, provisioning HTTP server, and virtiofsd helpers.
-The command returns after QEMU starts and any configured `boot_commands`
-finish. `after_script` runs when the VM exits or is stopped. Supervisor logs
+The command returns as soon as QEMU starts. Any configured `boot_commands`
+continue in the background under the supervisor. `after_script` runs when the VM exits or is stopped. Supervisor logs
 are stored in the instance's `qemu-compose.log`, and detached serial output is
 stored in `console.log`.
 
@@ -27,7 +27,9 @@ When a detached VM's `boot_commands` reaches an `interact` action, startup
 finishes and the serial console is handed to `qemu-compose attach` instead of
 blocking `up -d`. Attach connects the local terminal bidirectionally to the
 guest serial console. Disconnecting with `Ctrl-p`, `Ctrl-q` leaves the VM
-running.
+running. While boot commands are still provisioning the guest, `attach` may
+report that its socket is not available yet; retry after provisioning reaches
+the interactive handoff.
 
 ## Advantages
 
