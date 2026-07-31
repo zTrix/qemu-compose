@@ -14,6 +14,10 @@ from qemu_compose.utils.jsonlisp import interp, default_env
 logger = logging.getLogger("qemu-compose.instance.terminal")
 
 
+class DetachRequested(Exception):
+    """Stop a detached boot-command batch at an interactive handoff."""
+
+
 class Terminal(object):
     def __init__(self, fd, log_path=None):
         self.fd = fd
@@ -79,12 +83,18 @@ class Terminal(object):
             env['writeline'] = io.writeline
             env['wait'] = io.read_until_timeout
             env['RegExp'] = lambda x: re.compile(x.encode())
-            env['interact'] = self.interact
+            def detach_interact(*_args, **_kwargs):
+                raise DetachRequested()
+
+            env['interact'] = self.interact if forward_stdin else detach_interact
 
             if env_variables:
                 env.update(env_variables)
 
-            interp(transpiled_cmds, env)
+            try:
+                interp(transpiled_cmds, env)
+            except DetachRequested:
+                logger.info("detached boot commands handed off to attach socket")
 
         finally:
             if use_stdin and current_tty_mode is not None:

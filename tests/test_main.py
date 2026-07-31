@@ -129,3 +129,20 @@ def test_cli_up_detach_dispatches_flag(monkeypatch, tmp_path):
         "project_directory": None,
         "detach": True,
     }]
+
+
+def test_cli_attach_dispatches_identifier(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "qemu_compose.cmd.attach_command.command_attach",
+        lambda *, identifier=None, config_path=None: calls.append(
+            (identifier, config_path)
+        ) or 0,
+    )
+    monkeypatch.setattr("sys.argv", ["qemu-compose", "attach", "vm1"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.cli()
+
+    assert exc_info.value.code == 0
+    assert calls == [("vm1", None)]

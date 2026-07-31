@@ -7,6 +7,8 @@ import base64
 import fcntl
 import shlex
 import logging
+import select
+import socket
 import subprocess
 import threading
 import time
@@ -185,6 +187,7 @@ class QemuRunner(QEMUMachine):
         self.storage_overlays: List[DiskSpec] = []
         self.virtiofs_children: List[subprocess.Popen] = []
         self.console_drain_thread: Optional[threading.Thread] = None
+        self.console_server_socket: Optional[socket.socket] = None
 
         if config.binary:
             binary = config.binary
@@ -696,25 +699,91 @@ class QemuRunner(QEMUMachine):
             self.term.interact(raw_mode=True)
 
     def start_console_drain(self) -> None:
-        """Drain detached guest serial output so QEMU cannot block on it."""
+        """Drain detached serial output and expose it through attach.sock."""
         if self.console_drain_thread is not None:
             return
 
         console_path = os.path.join(self.instance_dir, "console.log")
+        attach_path = os.path.join(self.instance_dir, "attach.sock")
+        try:
+            os.unlink(attach_path)
+        except FileNotFoundError:
+            pass
+
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(attach_path)
+        os.chmod(attach_path, 0o600)
+        listener.listen(4)
+        listener.setblocking(False)
+        self.console_server_socket = listener
 
         def drain() -> None:
+            clients: Dict[socket.socket, bytearray] = {}
             try:
                 with open(console_path, "ab", buffering=0) as output:
                     while self.is_running():
                         try:
-                            data = self.console_file.recv(65536)
-                        except (OSError, AttributeError):
+                            readers = [listener, self.console_file, *clients]
+                            writers = [client for client, pending in clients.items() if pending]
+                            readable, writable, _ = select.select(readers, writers, [], 0.2)
+                        except (OSError, ValueError, AttributeError):
                             break
-                        if not data:
-                            break
-                        output.write(data)
+
+                        if listener in readable:
+                            try:
+                                client, _ = listener.accept()
+                                client.setblocking(False)
+                                clients[client] = bytearray()
+                            except OSError:
+                                pass
+
+                        if self.console_file in readable:
+                            try:
+                                data = self.console_file.recv(65536)
+                            except OSError:
+                                data = b""
+                            if not data:
+                                break
+                            output.write(data)
+                            for client, pending in list(clients.items()):
+                                pending.extend(data)
+                                if len(pending) > 1024 * 1024:
+                                    client.close()
+                                    clients.pop(client, None)
+
+                        for client in [c for c in readable if c in clients]:
+                            try:
+                                data = client.recv(65536)
+                                if data:
+                                    self.console_file.sendall(data)
+                                else:
+                                    client.close()
+                                    clients.pop(client, None)
+                            except OSError:
+                                client.close()
+                                clients.pop(client, None)
+
+                        for client in writable:
+                            pending = clients.get(client)
+                            if pending is None:
+                                continue
+                            try:
+                                sent = client.send(pending)
+                                del pending[:sent]
+                            except OSError:
+                                client.close()
+                                clients.pop(client, None)
             except Exception as e:
                 logger.debug("console drain stopped: %s", e)
+            finally:
+                for client in clients:
+                    client.close()
+                listener.close()
+                self.console_server_socket = None
+                try:
+                    os.unlink(attach_path)
+                except FileNotFoundError:
+                    pass
 
         self.console_drain_thread = threading.Thread(
             target=drain,

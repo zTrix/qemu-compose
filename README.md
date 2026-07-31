@@ -11,6 +11,8 @@ Run the VM in the background with Docker Compose-style detach mode:
 $ qemu-compose up -d
 Started vm1 (abc123def456) in detached mode
 $ qemu-compose ps
+$ qemu-compose attach vm1
+# Press Ctrl-p Ctrl-q to detach without stopping the VM.
 $ qemu-compose stop vm1
 ```
 
@@ -20,6 +22,12 @@ The command returns after QEMU starts and any configured `boot_commands`
 finish. `after_script` runs when the VM exits or is stopped. Supervisor logs
 are stored in the instance's `qemu-compose.log`, and detached serial output is
 stored in `console.log`.
+
+When a detached VM's `boot_commands` reaches an `interact` action, startup
+finishes and the serial console is handed to `qemu-compose attach` instead of
+blocking `up -d`. Attach connects the local terminal bidirectionally to the
+guest serial console. Disconnecting with `Ctrl-p`, `Ctrl-q` leaves the VM
+running.
 
 ## Advantages
 

@@ -107,6 +107,7 @@ def cli():
         usage="qemu-compose [OPTIONS] COMMAND",
  epilog="""Commands:
   up          Create and start QEMU vm
+  attach      Attach local standard streams to a running VM
   ssh         Run ssh with instance key
   monitor     Connect to the QEMU monitor
   ps          List VM instances
@@ -199,6 +200,26 @@ def cli():
 
         config_path = guess_conf_path(args.file)
         sys.exit(command_ssh(identifier=ssh_args.identifier, passthrough=ssh_args.command, config_path=config_path))
+    elif args.command == "attach":
+        import argparse as _argparse
+
+        attach_parser = _argparse.ArgumentParser(
+            prog="qemu-compose attach",
+            add_help=True,
+            description="Attach local standard streams to a running VM",
+        )
+        attach_parser.add_argument(
+            "identifier",
+            type=str,
+            nargs="?",
+            help="Instance ID, unique prefix, or assigned name",
+        )
+        attach_args = attach_parser.parse_args(rest)
+
+        from .cmd.attach_command import command_attach
+
+        config_path = guess_conf_path(args.file)
+        sys.exit(command_attach(identifier=attach_args.identifier, config_path=config_path))
     elif args.command == "monitor":
         import argparse as _argparse
 
