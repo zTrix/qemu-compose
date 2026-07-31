@@ -8,6 +8,7 @@ import fcntl
 import shlex
 import logging
 import subprocess
+import threading
 import time
 import yaml
 import json
@@ -183,6 +184,7 @@ class QemuRunner(QEMUMachine):
         self.image_manifest: Optional[ImageManifest] = None
         self.storage_overlays: List[DiskSpec] = []
         self.virtiofs_children: List[subprocess.Popen] = []
+        self.console_drain_thread: Optional[threading.Thread] = None
 
         if config.binary:
             binary = config.binary
@@ -284,7 +286,7 @@ class QemuRunner(QEMUMachine):
         return 0
 
     def prepare_env(self, env_update: Optional[Dict[str, str]] = None):
-        term_size = os.get_terminal_size()
+        term_size = shutil.get_terminal_size(fallback=(80, 24))
 
         env = {
             'CWD': self.cwd,
@@ -680,12 +682,46 @@ class QemuRunner(QEMUMachine):
         except Exception as e:
             logger.warning("failed to write instance metadata: %s", e)
 
-    def interact(self):
+    def interact(self, detached: bool = False):
         boot_commands = self.config.boot_commands
         if boot_commands:
-            self.term.run_batch(boot_commands, env_variables=self.env)
+            self.term.run_batch(
+                boot_commands,
+                env_variables=self.env,
+                forward_stdin=not detached,
+            )
         else:
+            if detached:
+                return
             self.term.interact(raw_mode=True)
+
+    def start_console_drain(self) -> None:
+        """Drain detached guest serial output so QEMU cannot block on it."""
+        if self.console_drain_thread is not None:
+            return
+
+        console_path = os.path.join(self.instance_dir, "console.log")
+
+        def drain() -> None:
+            try:
+                with open(console_path, "ab", buffering=0) as output:
+                    while self.is_running():
+                        try:
+                            data = self.console_file.recv(65536)
+                        except (OSError, AttributeError):
+                            break
+                        if not data:
+                            break
+                        output.write(data)
+            except Exception as e:
+                logger.debug("console drain stopped: %s", e)
+
+        self.console_drain_thread = threading.Thread(
+            target=drain,
+            name=f"qemu-console-{self.vmid}",
+            daemon=True,
+        )
+        self.console_drain_thread.start()
 
     def cleanup(self):
         self._load_io_log()

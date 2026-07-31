@@ -154,6 +154,11 @@ def cli():
             type=str,
             help="Specify an alternate working directory (default: the path of the Compose file)",
         )
+        sub_parser.add_argument(
+            "-d", "--detach",
+            action="store_true",
+            help="Run the VM in the background",
+        )
         sub_args = sub_parser.parse_args(rest)
 
         conf_path = guess_conf_path(args.file)
@@ -163,7 +168,11 @@ def cli():
 
         from .cmd.up_command import command_up
 
-        sys.exit(command_up(config_path=conf_path, project_directory=sub_args.project_directory))
+        sys.exit(command_up(
+            config_path=conf_path,
+            project_directory=sub_args.project_directory,
+            detach=sub_args.detach,
+        ))
     elif args.command == "ssh":
         import argparse as _argparse
 
