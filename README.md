@@ -27,9 +27,8 @@ When a detached VM's `boot_commands` reaches an `interact` action, startup
 finishes and the serial console is handed to `qemu-compose attach` instead of
 blocking `up -d`. Attach connects the local terminal bidirectionally to the
 guest serial console. Disconnecting with `Ctrl-p`, `Ctrl-q` leaves the VM
-running. While boot commands are still provisioning the guest, `attach` may
-report that its socket is not available yet; retry after provisioning reaches
-the interactive handoff.
+running. If boot commands are still provisioning the guest, `attach` waits and
+connects automatically when provisioning reaches the interactive handoff.
 
 ## Advantages
 

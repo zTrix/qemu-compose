@@ -5,6 +5,7 @@ import select
 import socket
 import sys
 import termios
+import time
 import tty
 from typing import Optional
 
@@ -84,12 +85,28 @@ def command_attach(
 
     attach_path = os.path.join(instance_dir, "attach.sock")
     if not os.path.exists(attach_path):
-        print(
-            "Error: instance has no attach socket; it may still be provisioning "
-            "or was not started in detached mode",
-            file=sys.stderr,
+        supervisor_pid = _to_int(
+            safe_read(os.path.join(instance_dir, "supervisor.pid"))
         )
-        return 1
+        if not _is_pid_running(supervisor_pid):
+            print(
+                "Error: instance has no attach socket and was not started "
+                "in detached mode",
+                file=sys.stderr,
+            )
+            return 1
+
+        try:
+            while not os.path.exists(attach_path):
+                if not _is_pid_running(qemu_pid):
+                    print("Error: instance exited while waiting to attach", file=sys.stderr)
+                    return 1
+                if not _is_pid_running(supervisor_pid):
+                    print("Error: provisioning failed while waiting to attach", file=sys.stderr)
+                    return 1
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            return 130
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
