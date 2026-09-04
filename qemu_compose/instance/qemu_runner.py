@@ -203,12 +203,67 @@ class QemuRunner(QEMUMachine):
             raise ValueError("vmid is not set")
         return self.store.instance_dir(self.vmid)
 
+    def _persisted_image_id(self) -> Optional[str]:
+        """
+        Image id recorded in the instance dir (written when the instance was first
+        created/booted), if any.
+        """
+        if self.config.instance is None:
+            return None
+        instance_dir = os.path.join(self.store.instance_root, str(self.config.instance))
+        return safe_read(os.path.join(instance_dir, "image-id"))
+
+    def _pinned_image_manifest(self) -> Optional[ImageManifest]:
+        """
+        Manifest of the image an existing instance was originally created with.
+
+        Persistent instances reuse their own overlay disks (storage.json), whose
+        backing files point at the image store build they were created against. They
+        must therefore keep booting the kernel from that same image. Re-resolving the
+        compose-file repo tag on every boot would pick up newer image-store builds
+        whose kernel has no matching /usr/lib/modules on the instance's rootfs
+        (virtio_net absent -> NIC never comes up -> guest has no user-network
+        connectivity). See NETWORK_BUG_REPORT.md.
+        """
+        if self.config.instance is None:
+            return None
+        image_id = self._persisted_image_id()
+        if not image_id:
+            return None
+        manifest = load_image_by_id(self.store.image_root, image_id)
+        if manifest is None:
+            print(
+                f"Warning: instance {self.config.instance} was created from image "
+                f"{image_id}, which is no longer in the local store; falling back to "
+                "resolving the image named in the config",
+                file=sys.stderr,
+            )
+        return manifest
+
+    def resolve_image_manifest(self) -> Optional[ImageManifest]:
+        """
+        Resolve which image manifest to boot from.
+
+        Resolution order:
+        1. An explicit image id in the config (a user pin) always wins.
+        2. For an existing instance, keep the image recorded at its creation instead
+           of re-resolving the repo tag, which may have moved to a newer build whose
+           kernel/rootfs no longer match the instance disk.
+        3. Otherwise resolve the config image as a repo tag (new instance creation).
+        """
+        manifest = load_image_by_id(self.store.image_root, self.config.image)
+        if manifest is not None:
+            return manifest
+
+        manifest = self._pinned_image_manifest()
+        if manifest is not None:
+            return manifest
+
+        return load_image_by_name(self.store.image_root, self.config.image)
+
     def check_and_lock(self) -> int:
         if self.config.image is not None:
-            manifest = load_image_by_id(self.store.image_root, self.config.image)
-
-            if manifest is None:
-                manifest = load_image_by_name(self.store.image_root, self.config.image)
+            manifest = self.resolve_image_manifest()
 
             if manifest is None:
                 print(f"Image '{self.config.image}' not found in local store", file=sys.stderr)
