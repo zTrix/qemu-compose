@@ -710,6 +710,41 @@ class QemuRunner(QEMUMachine):
 
         self.add_args(*args)
 
+    def _record_instance_metadata(self, pid: Optional[str]) -> None:
+        """
+        Persist instance metadata to the instance dir.
+
+        Per-boot state (qemu.pid/cid/name/instance-id) is written every time. The
+        image/image-id files, however, record the concrete image build the instance
+        boots and are written only on the first boot, or when the resolved image
+        actually changed (a deliberate explicit-id override). An ordinary reboot must
+        not rewrite image-id: doing so would silently move the record onto a newer
+        repo-tag build whose kernel has no matching modules on the instance's rootfs
+        (e.g. virtio_net absent -> NIC never comes up -> no user network).
+        See NETWORK_BUG_REPORT.md.
+        """
+        image_id_path = os.path.join(self.instance_dir, "image-id")
+        recorded_image_id = safe_read(image_id_path)
+        new_image_id = str(self.image_manifest.id) if self.image_manifest is not None else ""
+
+        try:
+            with open(os.path.join(self.instance_dir, "qemu.pid"), "w") as f:
+                f.write("%s" % (str(pid) if pid is not None else ""))
+            with open(os.path.join(self.instance_dir, "cid"), "w") as f:
+                f.write(str(self.cid))
+            with open(os.path.join(self.instance_dir, "name"), "w") as f:
+                f.write(str(self.vm_name) if self.vm_name is not None else "")
+            with open(os.path.join(self.instance_dir, "instance-id"), "w") as f:
+                f.write(str(self.vmid))
+
+            if recorded_image_id is None or (new_image_id and new_image_id != recorded_image_id):
+                with open(os.path.join(self.instance_dir, "image"), "w") as f:
+                    f.write(str(self.config.image) if self.config.image is not None else "")
+                with open(image_id_path, "w") as f:
+                    f.write(new_image_id)
+        except Exception as e:
+            logger.warning("failed to write instance metadata: %s", e)
+
     def start(self):
         self.launch()
 
@@ -719,21 +754,7 @@ class QemuRunner(QEMUMachine):
             pid = self.get_pid()
         except Exception:
             pid = None
-        try:
-            with open(os.path.join(self.instance_dir, "qemu.pid"), "w") as f:
-                f.write("%s" % (str(pid) if pid is not None else ""))
-            with open(os.path.join(self.instance_dir, "cid"), "w") as f:
-                f.write(str(self.cid))
-            with open(os.path.join(self.instance_dir, "name"), "w") as f:
-                f.write(str(self.vm_name) if self.vm_name is not None else "")
-            with open(os.path.join(self.instance_dir, "image"), "w") as f:
-                f.write(str(self.config.image) if self.config.image is not None else "")
-            with open(os.path.join(self.instance_dir, "image-id"), "w") as f:
-                f.write(str(self.image_manifest.id) if self.image_manifest is not None else "")
-            with open(os.path.join(self.instance_dir, "instance-id"), "w") as f:
-                f.write(str(self.vmid))
-        except Exception as e:
-            logger.warning("failed to write instance metadata: %s", e)
+        self._record_instance_metadata(pid)
 
     def interact(self):
         boot_commands = self.config.boot_commands

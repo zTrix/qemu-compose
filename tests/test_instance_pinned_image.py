@@ -17,6 +17,7 @@ except Exception:
     sys.modules.setdefault("Crypto.PublicKey", crypto_public_key_module)
 
 import qemu_compose.instance.qemu_runner as qemu_runner_module
+from qemu_compose.image import load_image_by_id
 from qemu_compose.instance.qemu_runner import QemuRunner, QemuConfig
 from qemu_compose.local_store import LocalStore
 
@@ -144,3 +145,44 @@ def test_missing_recorded_image_falls_back_to_tag(tmp_path, monkeypatch, capsys)
     assert vm.image_manifest is not None
     assert vm.image_manifest.id == NEW_ID
     assert OLD_ID in capsys.readouterr().err
+
+
+def _runner_with_vmid(tmp_path: Path, *, config_image: str = TAG) -> tuple[QemuRunner, LocalStore]:
+    store = LocalStore()
+    vm = make_runner(tmp_path, config_image=config_image, instance=VMID)
+    vm.vmid = VMID
+    return vm, store
+
+
+def test_image_id_recorded_on_first_boot_and_not_rewritten_on_reboot(tmp_path, monkeypatch):
+    """image/image-id must be recorded once (first boot) and must NOT be rewritten by
+    an ordinary reboot: that rewrite is what silently moved the record onto a newer
+    tag build and caused the kernel/rootfs mismatch in NETWORK_BUG_REPORT.md."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    image_root = tmp_path / "qemu-compose" / "image"
+    write_manifest(image_root, OLD_ID, [TAG])
+    write_manifest(image_root, NEW_ID, [])
+    store = LocalStore()
+    inst_dir = Path(store.instance_dir(VMID))
+    (inst_dir / "name").write_text(VMID)
+
+    vm, _ = _runner_with_vmid(tmp_path)
+    vm.image_manifest = load_image_by_id(store.image_root, OLD_ID)
+
+    # First boot: record the resolved creation image.
+    vm._record_instance_metadata("100")
+    assert (inst_dir / "image").read_text() == TAG
+    assert (inst_dir / "image-id").read_text() == OLD_ID
+    id_mtime = (inst_dir / "image-id").stat().st_mtime_ns
+
+    # Reboot: restart is pinned back to the recorded image -> file must not change.
+    vm.image_manifest = load_image_by_id(store.image_root, OLD_ID)
+    vm._record_instance_metadata("101")
+    assert (inst_dir / "image-id").read_text() == OLD_ID
+    assert (inst_dir / "image-id").stat().st_mtime_ns == id_mtime
+    assert (inst_dir / "image").read_text() == TAG
+
+    # Deliberate explicit-id switch to another build -> record follows reality.
+    vm.image_manifest = load_image_by_id(store.image_root, NEW_ID)
+    vm._record_instance_metadata("102")
+    assert (inst_dir / "image-id").read_text() == NEW_ID
