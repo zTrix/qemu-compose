@@ -46,6 +46,17 @@ def test_monitor_reports_missing_socket(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     instance_dir = create_instance(tmp_path)
 
+    # Deterministically simulate the real connect failing because no socket exists.
+    # (A genuine OS-level connect is avoided here: when tmp_path is long enough to
+    # push the socket path past the AF_UNIX sun_path limit, connect() raises a
+    # generic OSError "AF_UNIX path too long" instead of FileNotFoundError.)
+    def raise_not_found(path):
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(
+        "qemu_compose.cmd.monitor_command._connect_monitor", raise_not_found
+    )
+
     assert command_monitor(identifier="vm-123") == 1
     assert str(instance_dir / "monitor.sock") in capsys.readouterr().err
 
