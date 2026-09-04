@@ -106,3 +106,29 @@ def test_ps_shows_short_image_id_when_manifest_has_no_repo_tags(tmp_path, monkey
 
     out = capsys.readouterr().out
     assert image_id[:12] in out
+
+
+def test_ps_shows_pinned_image_when_repo_tag_moved_to_newer_build(tmp_path, monkeypatch, capsys):
+    """When the repo tag moves to a newer build, an existing instance stays pinned to
+    the image it was created from (NETWORK_BUG_REPORT.md). ps must show that pinned
+    build (its remaining repo tag, else its short id), not the tag's current build."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    image_root = tmp_path / "qemu-compose" / "image"
+    old_id = "aabbccddeeff00112233445566778899"
+    new_id = "99887766554433221100ffeeddccbbaa"
+    # Pinned (creation) build lost the tag when it moved to the new build.
+    write_manifest(image_root / old_id, old_id, [])
+    write_manifest(image_root / new_id, new_id, ["repo:latest"])
+    write_instance_meta(
+        tmp_path / "qemu-compose" / "instance" / "inst-aabbccddeeff",
+        name="vm5",
+        image="repo:latest",
+        image_id=old_id,
+    )
+
+    assert command_ps(show_all=True) == 0
+
+    out = capsys.readouterr().out
+    assert old_id[:12] in out
+    assert "repo:latest" not in out

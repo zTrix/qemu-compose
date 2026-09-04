@@ -203,12 +203,67 @@ class QemuRunner(QEMUMachine):
             raise ValueError("vmid is not set")
         return self.store.instance_dir(self.vmid)
 
+    def _persisted_image_id(self) -> Optional[str]:
+        """
+        Image id recorded in the instance dir (written when the instance was first
+        created/booted), if any.
+        """
+        if self.config.instance is None:
+            return None
+        instance_dir = os.path.join(self.store.instance_root, str(self.config.instance))
+        return safe_read(os.path.join(instance_dir, "image-id"))
+
+    def _pinned_image_manifest(self) -> Optional[ImageManifest]:
+        """
+        Manifest of the image an existing instance was originally created with.
+
+        Persistent instances reuse their own overlay disks (storage.json), whose
+        backing files point at the image store build they were created against. They
+        must therefore keep booting the kernel from that same image. Re-resolving the
+        compose-file repo tag on every boot would pick up newer image-store builds
+        whose kernel has no matching /usr/lib/modules on the instance's rootfs
+        (virtio_net absent -> NIC never comes up -> guest has no user-network
+        connectivity). See NETWORK_BUG_REPORT.md.
+        """
+        if self.config.instance is None:
+            return None
+        image_id = self._persisted_image_id()
+        if not image_id:
+            return None
+        manifest = load_image_by_id(self.store.image_root, image_id)
+        if manifest is None:
+            print(
+                f"Warning: instance {self.config.instance} was created from image "
+                f"{image_id}, which is no longer in the local store; falling back to "
+                "resolving the image named in the config",
+                file=sys.stderr,
+            )
+        return manifest
+
+    def resolve_image_manifest(self) -> Optional[ImageManifest]:
+        """
+        Resolve which image manifest to boot from.
+
+        Resolution order:
+        1. An explicit image id in the config (a user pin) always wins.
+        2. For an existing instance, keep the image recorded at its creation instead
+           of re-resolving the repo tag, which may have moved to a newer build whose
+           kernel/rootfs no longer match the instance disk.
+        3. Otherwise resolve the config image as a repo tag (new instance creation).
+        """
+        manifest = load_image_by_id(self.store.image_root, self.config.image)
+        if manifest is not None:
+            return manifest
+
+        manifest = self._pinned_image_manifest()
+        if manifest is not None:
+            return manifest
+
+        return load_image_by_name(self.store.image_root, self.config.image)
+
     def check_and_lock(self) -> int:
         if self.config.image is not None:
-            manifest = load_image_by_id(self.store.image_root, self.config.image)
-
-            if manifest is None:
-                manifest = load_image_by_name(self.store.image_root, self.config.image)
+            manifest = self.resolve_image_manifest()
 
             if manifest is None:
                 print(f"Image '{self.config.image}' not found in local store", file=sys.stderr)
@@ -655,6 +710,41 @@ class QemuRunner(QEMUMachine):
 
         self.add_args(*args)
 
+    def _record_instance_metadata(self, pid: Optional[str]) -> None:
+        """
+        Persist instance metadata to the instance dir.
+
+        Per-boot state (qemu.pid/cid/name/instance-id) is written every time. The
+        image/image-id files, however, record the concrete image build the instance
+        boots and are written only on the first boot, or when the resolved image
+        actually changed (a deliberate explicit-id override). An ordinary reboot must
+        not rewrite image-id: doing so would silently move the record onto a newer
+        repo-tag build whose kernel has no matching modules on the instance's rootfs
+        (e.g. virtio_net absent -> NIC never comes up -> no user network).
+        See NETWORK_BUG_REPORT.md.
+        """
+        image_id_path = os.path.join(self.instance_dir, "image-id")
+        recorded_image_id = safe_read(image_id_path)
+        new_image_id = str(self.image_manifest.id) if self.image_manifest is not None else ""
+
+        try:
+            with open(os.path.join(self.instance_dir, "qemu.pid"), "w") as f:
+                f.write("%s" % (str(pid) if pid is not None else ""))
+            with open(os.path.join(self.instance_dir, "cid"), "w") as f:
+                f.write(str(self.cid))
+            with open(os.path.join(self.instance_dir, "name"), "w") as f:
+                f.write(str(self.vm_name) if self.vm_name is not None else "")
+            with open(os.path.join(self.instance_dir, "instance-id"), "w") as f:
+                f.write(str(self.vmid))
+
+            if recorded_image_id is None or (new_image_id and new_image_id != recorded_image_id):
+                with open(os.path.join(self.instance_dir, "image"), "w") as f:
+                    f.write(str(self.config.image) if self.config.image is not None else "")
+                with open(image_id_path, "w") as f:
+                    f.write(new_image_id)
+        except Exception as e:
+            logger.warning("failed to write instance metadata: %s", e)
+
     def start(self):
         self.launch()
 
@@ -664,21 +754,7 @@ class QemuRunner(QEMUMachine):
             pid = self.get_pid()
         except Exception:
             pid = None
-        try:
-            with open(os.path.join(self.instance_dir, "qemu.pid"), "w") as f:
-                f.write("%s" % (str(pid) if pid is not None else ""))
-            with open(os.path.join(self.instance_dir, "cid"), "w") as f:
-                f.write(str(self.cid))
-            with open(os.path.join(self.instance_dir, "name"), "w") as f:
-                f.write(str(self.vm_name) if self.vm_name is not None else "")
-            with open(os.path.join(self.instance_dir, "image"), "w") as f:
-                f.write(str(self.config.image) if self.config.image is not None else "")
-            with open(os.path.join(self.instance_dir, "image-id"), "w") as f:
-                f.write(str(self.image_manifest.id) if self.image_manifest is not None else "")
-            with open(os.path.join(self.instance_dir, "instance-id"), "w") as f:
-                f.write(str(self.vmid))
-        except Exception as e:
-            logger.warning("failed to write instance metadata: %s", e)
+        self._record_instance_metadata(pid)
 
     def interact(self):
         boot_commands = self.config.boot_commands
