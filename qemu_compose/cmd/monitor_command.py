@@ -188,6 +188,9 @@ def command_monitor(
     except KeyboardInterrupt:
         return 130
     except OSError as error:
-        print(f"Error connecting to monitor: {error}", file=sys.stderr)
+        if not os.path.exists(socket_path):
+            print(f"Error: monitor socket not found: {socket_path}", file=sys.stderr)
+        else:
+            print(f"Error connecting to monitor: {error}", file=sys.stderr)
         return 1
     return 0

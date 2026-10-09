@@ -56,6 +56,12 @@ def _is_pid_running(pid: Optional[int]) -> bool:
         return False
     try:
         os.kill(pid, 0)
+        try:
+            with open(f"/proc/{pid}/stat") as stat_file:
+                if stat_file.read().split()[2] == "Z":
+                    return False
+        except (FileNotFoundError, IndexError, OSError):
+            pass
         return True
     except Exception:
         return False
@@ -148,9 +154,12 @@ def command_down(
         return 1
 
     pid = _to_int(safe_read(os.path.join(instance_dir, "qemu.pid")))
+    supervisor_pid = _to_int(safe_read(os.path.join(instance_dir, "supervisor.pid")))
     name = safe_read(os.path.join(instance_dir, "name"))
 
-    if pid and _is_pid_running(pid):
+    qemu_running = _is_pid_running(pid)
+    supervisor_running = _is_pid_running(supervisor_pid)
+    if qemu_running or supervisor_running:
         if not stop_running and not force:
             remove_id = display_identifier or identifier or vmid
             print(
@@ -160,8 +169,12 @@ def command_down(
             )
             return 1
 
-        print(f"Stopping instance {instance_label(vmid, name)} (pid: {pid})...", flush=True)
-        stop_pid(pid)
+        shown_pid = pid if qemu_running else supervisor_pid
+        print(f"Stopping instance {instance_label(vmid, name)} (pid: {shown_pid})...", flush=True)
+        target_pid = supervisor_pid if supervisor_running else pid
+        if not stop_pid(target_pid):
+            print(f"Error: failed to stop instance {instance_label(vmid, name)}", file=sys.stderr)
+            return 1
 
     try:
         shutil.rmtree(instance_dir)

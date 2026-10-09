@@ -14,6 +14,10 @@ from qemu_compose.utils.jsonlisp import interp, default_env
 logger = logging.getLogger("qemu-compose.instance.terminal")
 
 
+class DetachRequested(Exception):
+    """Stop a detached boot-command batch at an interactive handoff."""
+
+
 class Terminal(object):
     def __init__(self, fd, log_path=None):
         self.fd = fd
@@ -28,9 +32,7 @@ class Terminal(object):
         self.term_feed_running = False
         self.term_feed_drain_thread = None
 
-        if not os.isatty(0):
-            raise Exception('qemu-compose.Terminal must run in a UNIX 98 style pty/tty')
-        else:
+        if os.isatty(0):
             signal.signal(signal.SIGWINCH, self.handle_resize)
 
     def handle_resize(self, signum, frame):
@@ -51,18 +53,21 @@ class Terminal(object):
 
         logger.info('Terminal.term_feed_loop finished.')
 
-    def run_batch(self, cmds:List, env_variables=None):
+    def run_batch(self, cmds:List, env_variables=None, forward_stdin=True):
         if not isinstance(cmds, list):
             raise ValueError("cmds must be a list")
         
-        current_tty_mode = tty.tcgetattr(0)[:]
-        ttyraw(0)
+        use_stdin = forward_stdin and os.isatty(0)
+        current_tty_mode = tty.tcgetattr(0)[:] if use_stdin else None
+        if use_stdin:
+            ttyraw(0)
 
         try:
-            self.term_feed_running = True
-            self.term_feed_drain_thread = threading.Thread(target=self.term_feed_loop)
-            self.term_feed_drain_thread.daemon = True
-            self.term_feed_drain_thread.start()
+            if use_stdin:
+                self.term_feed_running = True
+                self.term_feed_drain_thread = threading.Thread(target=self.term_feed_loop)
+                self.term_feed_drain_thread.daemon = True
+                self.term_feed_drain_thread.start()
             
             io = self.io
 
@@ -78,15 +83,22 @@ class Terminal(object):
             env['writeline'] = io.writeline
             env['wait'] = io.read_until_timeout
             env['RegExp'] = lambda x: re.compile(x.encode())
-            env['interact'] = self.interact
+            def detach_interact(*_args, **_kwargs):
+                raise DetachRequested()
+
+            env['interact'] = self.interact if forward_stdin else detach_interact
 
             if env_variables:
                 env.update(env_variables)
 
-            interp(transpiled_cmds, env)
+            try:
+                interp(transpiled_cmds, env)
+            except DetachRequested:
+                logger.info("detached boot commands handed off to attach socket")
 
         finally:
-            tty.tcsetattr(0, tty.TCSAFLUSH, current_tty_mode)
+            if use_stdin and current_tty_mode is not None:
+                tty.tcsetattr(0, tty.TCSAFLUSH, current_tty_mode)
 
     def interact(self, buffered:Optional[bytes]=None, raw_mode=False):
 

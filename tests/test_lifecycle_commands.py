@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from qemu_compose.cmd import down_command, stop_command
+from qemu_compose.cmd import down_command, stop_command, up_command
 from qemu_compose.cmd.down_command import command_down
 from qemu_compose.cmd.stop_command import command_stop
 from qemu_compose.cmd.up_command import command_up
+from qemu_compose.instance.lifecycle import run_vm_lifecycle
 
 
 def write_instance(instance_root: Path, vmid: str, *, name: str, pid: str = "") -> Path:
@@ -195,3 +197,115 @@ def test_up_creates_new_instance_when_name_is_unused(tmp_path, monkeypatch):
     assert ("init", None, "vm1", str(tmp_path)) in calls
     assert ("prepare_env", None) in calls
     assert ("start",) in calls
+
+
+def test_detached_lifecycle_reports_ready_then_waits_and_cleans_up():
+    calls = []
+
+    class FakeRunner:
+        running = True
+
+        def start(self):
+            calls.append("start")
+
+        def interact(self, detached=False):
+            calls.append(("interact", detached))
+
+        def start_console_drain(self):
+            calls.append("drain")
+
+        def enable_console_drain(self):
+            calls.append("enable_drain")
+            self.running = False
+
+        def is_running(self):
+            return self.running
+
+        def wait(self, timeout=None):
+            calls.append(("wait", timeout))
+
+        def execute_script(self, name):
+            calls.append(("script", name))
+
+        def cleanup(self):
+            calls.append("cleanup")
+
+    runner = FakeRunner()
+    assert run_vm_lifecycle(
+        runner,
+        detached=True,
+        on_ready=lambda _vm: calls.append("ready"),
+    ) == 0
+
+    assert calls == [
+        "start",
+        "drain",
+        "ready",
+        ("interact", True),
+        "enable_drain",
+        ("wait", None),
+        ("script", "after_script"),
+        "cleanup",
+    ]
+
+
+def test_stop_prefers_detached_supervisor_pid(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    instance_root = tmp_path / "qemu-compose" / "instance"
+    instance_dir = write_instance(instance_root, "abc123def456", name="vm1", pid="1234")
+    (instance_dir / "supervisor.pid").write_text("4321")
+    stopped = []
+
+    monkeypatch.setattr(stop_command, "_is_pid_running", lambda pid: pid in (1234, 4321))
+    monkeypatch.setattr(stop_command, "stop_pid", lambda pid: stopped.append(pid) or True)
+
+    assert command_stop(identifier="vm1") == 0
+    assert stopped == [4321]
+
+
+def test_detached_parent_waits_for_worker_readiness(monkeypatch, tmp_path, capsys):
+    compose_file = tmp_path / "qemu-compose.yml"
+    compose_file.write_text("name: vm1\n")
+
+    def fake_popen(_command, **kwargs):
+        write_fd = kwargs["pass_fds"][0]
+        os.write(write_fd, (
+            '{"status":"ready","instance_id":"abc123","name":"vm1",'
+            '"qemu_pid":1234,"supervisor_pid":4321}\n'
+        ).encode())
+        return object()
+
+    monkeypatch.setattr(up_command.subprocess, "Popen", fake_popen)
+
+    assert command_up(config_path=str(compose_file), detach=True) == 0
+    assert "Started vm1 (abc123) in detached mode" in capsys.readouterr().out
+
+
+def test_detached_parent_propagates_worker_failure(monkeypatch, tmp_path, capsys):
+    compose_file = tmp_path / "qemu-compose.yml"
+    compose_file.write_text("name: vm1\n")
+
+    def fake_popen(_command, **kwargs):
+        write_fd = kwargs["pass_fds"][0]
+        os.write(write_fd, b'{"status":"error","exit_code":7,"message":"QEMU failed"}\n')
+        return object()
+
+    monkeypatch.setattr(up_command.subprocess, "Popen", fake_popen)
+
+    assert command_up(config_path=str(compose_file), detach=True) == 7
+    assert "QEMU failed" in capsys.readouterr().err
+
+
+def test_detached_real_supervisor_reports_startup_failure(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "store"))
+    compose_file = tmp_path / "qemu-compose.yml"
+    compose_file.write_text(
+        "name: broken-vm\n"
+        "binary: /definitely/missing/qemu-system-x86_64\n"
+        "network: none\n"
+    )
+
+    result = command_up(config_path=str(compose_file), detach=True)
+
+    assert result != 0
+    assert "Error:" in capsys.readouterr().err

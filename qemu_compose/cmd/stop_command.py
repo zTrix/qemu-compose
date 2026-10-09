@@ -26,14 +26,19 @@ def command_stop(*, identifier: str) -> int:
         return 1
 
     pid = _to_int(safe_read(os.path.join(instance_dir, "qemu.pid")))
+    supervisor_pid = _to_int(safe_read(os.path.join(instance_dir, "supervisor.pid")))
     name = safe_read(os.path.join(instance_dir, "name"))
 
-    if not pid or not _is_pid_running(pid):
+    supervisor_running = _is_pid_running(supervisor_pid)
+    qemu_running = _is_pid_running(pid)
+    target_pid = supervisor_pid if supervisor_running else pid
+    if not target_pid or not _is_pid_running(target_pid):
         print(f"Instance {instance_label(vmid, name)} is not running", flush=True)
         return 0
 
-    print(f"Stopping instance {instance_label(vmid, name)} (pid: {pid})...", flush=True)
-    if not stop_pid(pid):
+    shown_pid = pid if qemu_running else supervisor_pid
+    print(f"Stopping instance {instance_label(vmid, name)} (pid: {shown_pid})...", flush=True)
+    if not stop_pid(target_pid):
         print(f"Error: failed to stop instance {instance_label(vmid, name)}", file=sys.stderr)
         return 1
 
