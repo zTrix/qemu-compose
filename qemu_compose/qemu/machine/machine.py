@@ -23,6 +23,7 @@ from itertools import chain
 import locale
 import logging
 import os
+import resource
 import shutil
 import signal
 import socket
@@ -51,6 +52,47 @@ from ..qmp.legacy import (
 
 
 LOG = logging.getLogger(__name__)
+
+# Minimum soft limit for RLIMIT_NOFILE in the QEMU process.  The slirp
+# user-mode network backend opens one file descriptor per connection, so a
+# low soft limit (commonly 1024) causes "Too many open files" failures.
+QEMU_NOFILE_SOFT_LIMIT = 1048576
+
+
+def _raise_nofile_limit() -> None:
+    """
+    Raise the soft RLIMIT_NOFILE limit for the about-to-be-exec'd QEMU process.
+
+    Runs in the child after fork() and before exec(), so it only affects QEMU
+    (and any process it in turn spawns), not the qemu-compose process itself.
+    Equivalent to running ``ulimit -n 1048576`` before QEMU starts.
+    """
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (ValueError, OSError):
+        return
+
+    target = QEMU_NOFILE_SOFT_LIMIT
+    if soft == resource.RLIM_INFINITY or soft >= target:
+        return
+
+    # Raise both soft and hard to the target in one go. Raising the hard limit
+    # requires privileges (e.g. CAP_SYS_RESOURCE); when running as root this
+    # succeeds and gives QEMU the full requested limit.
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, target))
+        return
+    except (ValueError, OSError):
+        pass
+
+    # Unprivileged fallback: raise the soft limit as far as the existing hard
+    # limit allows. Best effort: never prevent QEMU from starting.
+    if hard != resource.RLIM_INFINITY and hard < target:
+        target = hard
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        pass
 
 
 class QEMUMachineError(Exception):
@@ -491,7 +533,8 @@ class QEMUMachine:
                                        stdout=self._qemu_log_file,
                                        stderr=subprocess.STDOUT,
                                        shell=False,
-                                       close_fds=False)
+                                       close_fds=False,
+                                       preexec_fn=_raise_nofile_limit)
         self._launched = True
         self._post_launch()
 
