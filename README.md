@@ -5,6 +5,31 @@ qemu-compose aims to provide a docker-compose style composer for qemu command, w
 
 Bring up a qemu VM by providing a qemu-compose.yml and run `qemu-compose up`
 
+Run the VM in the background with Docker Compose-style detach mode:
+
+```console
+$ qemu-compose up -d
+Started vm1 (abc123def456) in detached mode
+$ qemu-compose ps
+$ qemu-compose attach vm1
+# Press Ctrl-p Ctrl-q to detach without stopping the VM.
+$ qemu-compose stop vm1
+```
+
+Detached mode keeps a small per-instance supervisor process alive to own the
+QMP and serial connections, provisioning HTTP server, and virtiofsd helpers.
+The command returns as soon as QEMU starts. Any configured `boot_commands`
+continue in the background under the supervisor. `after_script` runs when the VM exits or is stopped. Supervisor logs
+are stored in the instance's `qemu-compose.log`, and detached serial output is
+stored in `console.log`.
+
+`qemu-compose attach` connects immediately and mirrors serial output while
+`boot_commands` provision the guest. When the commands reach an `interact`
+action, the same connection becomes a fully interactive console without
+blocking `up -d`. Disconnecting with `Ctrl-p`, `Ctrl-q` leaves the VM running.
+Every attach replays `console.log` from the beginning and then follows live
+serial output, so boot output remains visible even when attaching later.
+
 ## Advantages
 
  - Very simple and robust, written of several pure python scripts, depends on `qemu` commands only.

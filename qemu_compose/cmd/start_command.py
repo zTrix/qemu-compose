@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional, List, Tuple, Dict
+from typing import Callable, Optional, List, Tuple, Dict
 
 import os
 import sys
@@ -7,7 +7,7 @@ import logging
 
 from qemu_compose.local_store import LocalStore
 from qemu_compose.instance.qemu_runner import QemuRunner, QemuConfig
-from qemu_compose.qemu.machine.machine import AbnormalShutdown
+from qemu_compose.instance.lifecycle import run_vm_lifecycle
 from qemu_compose.utils import safe_read
 
 logger = logging.getLogger("qemu-compose.cmd.start_command")
@@ -51,6 +51,8 @@ def command_start(
     config_path: Optional[str] = None,
     cwd: Optional[str] = None,
     env_update: Optional[Dict[str, str]] = None,
+    _detached_worker: bool = False,
+    _on_ready: Optional[Callable[[QemuRunner], None]] = None,
 ) -> int:
     store = LocalStore()
     instance_root = store.instance_root
@@ -105,19 +107,8 @@ def command_start(
     vm.execute_script('before_script')
     vm.setup_qemu_args()
 
-    try:
-        vm.start()
-        vm.interact()
-        vm.execute_script('after_script')
-    except KeyboardInterrupt:
-        logger.warning("Keyboard interrupt, shutting down vm...")
-    finally:
-        try:
-            if vm is not None and vm.is_running():
-                vm.shutdown(hard=True)
-        except AbnormalShutdown:
-            logger.error('abnormal shutdown exception')
-        finally:
-            if vm is not None:
-                vm.cleanup()
-    return 0
+    return run_vm_lifecycle(
+        vm,
+        detached=_detached_worker,
+        on_ready=_on_ready,
+    )

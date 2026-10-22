@@ -108,3 +108,41 @@ def test_cli_monitor_dispatches_identifier(monkeypatch):
 
     assert exc_info.value.code == 0
     assert calls == [("vm1", None)]
+
+
+def test_cli_up_detach_dispatches_flag(monkeypatch, tmp_path):
+    calls = []
+    compose_file = tmp_path / "qemu-compose.yml"
+    compose_file.write_text("name: vm1\n")
+    monkeypatch.setattr(
+        "qemu_compose.cmd.up_command.command_up",
+        lambda **kwargs: calls.append(kwargs) or 0,
+    )
+    monkeypatch.setattr("sys.argv", ["qemu-compose", "-f", str(compose_file), "up", "-d"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.cli()
+
+    assert exc_info.value.code == 0
+    assert calls == [{
+        "config_path": str(compose_file),
+        "project_directory": None,
+        "detach": True,
+    }]
+
+
+def test_cli_attach_dispatches_identifier(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "qemu_compose.cmd.attach_command.command_attach",
+        lambda *, identifier=None, config_path=None: calls.append(
+            (identifier, config_path)
+        ) or 0,
+    )
+    monkeypatch.setattr("sys.argv", ["qemu-compose", "attach", "vm1"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.cli()
+
+    assert exc_info.value.code == 0
+    assert calls == [("vm1", None)]
