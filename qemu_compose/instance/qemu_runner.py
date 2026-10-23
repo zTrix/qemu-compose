@@ -633,10 +633,10 @@ class QemuRunner(QEMUMachine):
                 # user-mode networking and port forwarding.
                 self.using_passt = True
                 self.passt_binary = passt_bin
-                self.passt_socket = os.path.join(self.instance_dir, "passt.sock")
+                self.passt_socket = self._passt_socket_path()
                 args.append('-netdev')
                 args.append(
-                    'stream,id=user.qemu-compose,addr.type=unix,addr.path='
+                    'stream,id=user.qemu-compose,server=off,addr.type=unix,addr.path='
                     + self.passt_socket
                 )
                 args.append('-device')
@@ -775,6 +775,15 @@ class QemuRunner(QEMUMachine):
         except Exception as e:
             logger.warning("failed to write instance metadata: %s", e)
 
+    def _passt_socket_path(self) -> str:
+        # Use a per-run path so a stale QEMU/passt process from an earlier
+        # failed attempt cannot connect to the new listener and make it exit.
+        name = "passt-%d.sock" % os.getpid()
+        path = os.path.join(self.instance_dir, name)
+        if len(path.encode()) >= 100:
+            path = os.path.join("/tmp", "qemu-compose-%s-%d.sock" % (str(self.vmid)[:8], os.getpid()))
+        return path
+
     def _passt_port_args(self) -> List[str]:
         tcp_ports: List[str] = []
         udp_ports: List[str] = []
@@ -796,12 +805,13 @@ class QemuRunner(QEMUMachine):
     def _passt_command(self) -> List[str]:
         assert self.passt_binary is not None
         assert self.passt_socket is not None
+        log_path = os.path.join(self.instance_dir, "passt.log")
         # Keep the traditional QEMU user-network addresses so existing
         # GATEWAY_IP / cloud-init URLs and port mappings continue to work.
         return [
             self.passt_binary,
             '-f',
-            '-e',
+            '-l', log_path,
             '-s', self.passt_socket,
             '-a', '10.0.2.15',
             '-n', '255.255.255.0',
@@ -825,9 +835,15 @@ class QemuRunner(QEMUMachine):
 
         cmd = self._passt_command()
         log_path = os.path.join(self.instance_dir, "passt.log")
+        console_log_path = os.path.join(self.instance_dir, "passt.console.log")
+        try:
+            if os.path.exists(log_path):
+                os.unlink(log_path)
+        except OSError as e:
+            logger.warning("failed to remove stale passt log %s: %s", log_path, e)
         logger.info("running passt %s" % (" ".join(shlex.quote(p) for p in cmd),))
         logger.info("passt log path: %s", log_path)
-        with open(log_path, 'ab', buffering=0) as log_fp:
+        with open(console_log_path, 'wb', buffering=0) as log_fp:
             self.passt_process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,
@@ -838,6 +854,9 @@ class QemuRunner(QEMUMachine):
         deadline = time.time() + 5.0
         while time.time() < deadline:
             if os.path.exists(self.passt_socket):
+                # The socket file appears just before listen(); give passt a
+                # moment to enter its accept loop before QEMU connects.
+                time.sleep(0.1)
                 return
             if self.passt_process.poll() is not None:
                 break
@@ -846,7 +865,8 @@ class QemuRunner(QEMUMachine):
         exit_code = self.passt_process.poll()
         self._stop_passt()
         raise RuntimeError(
-            "passt failed to start (exit code %s); see %s" % (exit_code, log_path)
+            "passt failed to start (exit code %s); see %s and %s"
+            % (exit_code, log_path, console_log_path)
         )
 
     def _stop_passt(self) -> None:

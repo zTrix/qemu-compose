@@ -49,7 +49,8 @@ def test_passt_port_arguments_and_slirp_compatible_addresses(tmp_path, monkeypat
     assert cmd[0] == "/usr/bin/passt"
     assert cmd[cmd.index("-g") + 1] == "10.0.2.2"
     assert cmd[cmd.index("-D") + 1] == "10.0.2.3"
-    assert "-e" in cmd
+    assert cmd[cmd.index("-l") + 1].endswith("passt.log")
+    assert "-e" not in cmd
     assert "-t" in cmd
     assert "-u" in cmd
 
@@ -70,7 +71,7 @@ def test_setup_uses_passt_stream_netdev_when_passt_exists(tmp_path, monkeypatch)
 
     assert runner.using_passt is True
     assert any(
-        arg.startswith("stream,id=user.qemu-compose,addr.type=unix,addr.path=")
+        arg.startswith("stream,id=user.qemu-compose,server=off,addr.type=unix,addr.path=")
         for arg in runner._args
     )
     assert not any(arg.startswith("user,id=user.qemu-compose") for arg in runner._args)
