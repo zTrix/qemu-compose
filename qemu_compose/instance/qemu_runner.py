@@ -812,8 +812,10 @@ class QemuRunner(QEMUMachine):
     def _passt_command(self) -> List[str]:
         assert self.passt_binary is not None
         assert self.passt_fd is not None
-        # Keep the traditional QEMU user-network addresses so existing
+        # Keep the traditional QEMU user-network guest/gateway addresses so
         # GATEWAY_IP / cloud-init URLs and port mappings continue to work.
+        # Do not override DNS: passt should advertise the host's real
+        # resolvers instead of the old slirp-only synthetic 10.0.2.3 address.
         return [
             self.passt_binary,
             '-f',
@@ -822,7 +824,6 @@ class QemuRunner(QEMUMachine):
             '-a', '10.0.2.15',
             '-n', '255.255.255.0',
             '-g', '10.0.2.2',
-            '-D', '10.0.2.3',
             *self._passt_port_args(),
         ]
 

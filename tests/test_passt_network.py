@@ -48,7 +48,7 @@ def test_passt_port_arguments_and_slirp_compatible_addresses(tmp_path, monkeypat
     cmd = runner._passt_command()
     assert cmd[0] == "/usr/bin/passt"
     assert cmd[cmd.index("-g") + 1] == "10.0.2.2"
-    assert cmd[cmd.index("-D") + 1] == "10.0.2.3"
+    assert "-D" not in cmd
     assert "-d" in cmd
     assert cmd[cmd.index("-F") + 1] == "123"
     assert "-s" not in cmd
