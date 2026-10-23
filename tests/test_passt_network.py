@@ -53,7 +53,7 @@ def test_passt_port_arguments_and_slirp_compatible_addresses(tmp_path, monkeypat
     assert "-u" in cmd
 
 
-def test_setup_uses_passt_socket_netdev_when_passt_exists(tmp_path, monkeypatch):
+def test_setup_uses_passt_stream_netdev_when_passt_exists(tmp_path, monkeypatch):
     runner = _make_runner(tmp_path, monkeypatch)
 
     real_which = qemu_runner.shutil.which
@@ -69,7 +69,7 @@ def test_setup_uses_passt_socket_netdev_when_passt_exists(tmp_path, monkeypatch)
 
     assert runner.using_passt is True
     assert any(
-        arg.startswith("socket,id=user.qemu-compose,connect=unix:")
+        arg.startswith("stream,id=user.qemu-compose,addr.type=unix,addr.path=")
         for arg in runner._args
     )
     assert not any(arg.startswith("user,id=user.qemu-compose") for arg in runner._args)

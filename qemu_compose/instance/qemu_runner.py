@@ -635,7 +635,10 @@ class QemuRunner(QEMUMachine):
                 self.passt_binary = passt_bin
                 self.passt_socket = os.path.join(self.instance_dir, "passt.sock")
                 args.append('-netdev')
-                args.append('socket,id=user.qemu-compose,connect=unix:' + self.passt_socket)
+                args.append(
+                    'stream,id=user.qemu-compose,addr.type=unix,addr.path='
+                    + self.passt_socket
+                )
                 args.append('-device')
                 args.append('virtio-net,netdev=user.qemu-compose')
             else:
