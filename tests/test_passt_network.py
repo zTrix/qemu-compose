@@ -37,7 +37,7 @@ def test_passt_port_arguments_and_slirp_compatible_addresses(tmp_path, monkeypat
         ports=["127.0.0.1:2222:22", "8080:80/tcp", "5353:53/udp"],
     )
     runner.passt_binary = "/usr/bin/passt"
-    runner.passt_socket = str(tmp_path / "passt.sock")
+    runner.passt_fd = 123
 
     assert runner._passt_port_args() == [
         "-t", "127.0.0.1/2222:22",
@@ -50,13 +50,15 @@ def test_passt_port_arguments_and_slirp_compatible_addresses(tmp_path, monkeypat
     assert cmd[cmd.index("-g") + 1] == "10.0.2.2"
     assert cmd[cmd.index("-D") + 1] == "10.0.2.3"
     assert "-d" in cmd
+    assert cmd[cmd.index("-F") + 1] == "123"
+    assert "-s" not in cmd
     assert "-l" not in cmd
     assert "-e" not in cmd
     assert "-t" in cmd
     assert "-u" in cmd
 
 
-def test_setup_uses_passt_stream_netdev_when_passt_exists(tmp_path, monkeypatch):
+def test_setup_uses_passt_fd_netdev_when_passt_exists(tmp_path, monkeypatch):
     runner = _make_runner(tmp_path, monkeypatch)
 
     real_which = qemu_runner.shutil.which
@@ -71,8 +73,9 @@ def test_setup_uses_passt_stream_netdev_when_passt_exists(tmp_path, monkeypatch)
     runner.setup_qemu_args()
 
     assert runner.using_passt is True
+    assert runner.passt_socketpair is not None
     assert any(
-        arg.startswith("stream,id=user.qemu-compose,server=off,addr.type=unix,addr.path=")
+        arg.startswith("socket,id=user.qemu-compose,fd=")
         for arg in runner._args
     )
     assert not any(arg.startswith("user,id=user.qemu-compose") for arg in runner._args)

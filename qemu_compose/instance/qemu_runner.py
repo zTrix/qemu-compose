@@ -6,6 +6,7 @@ import sys
 import base64
 import fcntl
 import shlex
+import socket
 import logging
 import subprocess
 import time
@@ -225,7 +226,9 @@ class QemuRunner(QEMUMachine):
         self.storage_overlays: List[DiskSpec] = []
         self.virtiofs_children: List[subprocess.Popen] = []
         self.passt_process: Optional[subprocess.Popen] = None
-        self.passt_socket: Optional[str] = None
+        self.passt_socketpair: Optional[Tuple[socket.socket, socket.socket]] = None
+        self.passt_fd: Optional[int] = None
+        self.qemu_passt_fd: Optional[int] = None
         self.passt_binary: Optional[str] = None
         self.using_passt = False
 
@@ -633,12 +636,12 @@ class QemuRunner(QEMUMachine):
                 # user-mode networking and port forwarding.
                 self.using_passt = True
                 self.passt_binary = passt_bin
-                self.passt_socket = self._passt_socket_path()
+                self._close_passt_socketpair()
+                self.passt_socketpair = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.passt_fd = self.passt_socketpair[0].fileno()
+                self.qemu_passt_fd = self.passt_socketpair[1].fileno()
                 args.append('-netdev')
-                args.append(
-                    'stream,id=user.qemu-compose,server=off,addr.type=unix,addr.path='
-                    + self.passt_socket
-                )
+                args.append('socket,id=user.qemu-compose,fd=%d' % self.qemu_passt_fd)
                 args.append('-device')
                 args.append('virtio-net,netdev=user.qemu-compose')
             else:
@@ -775,14 +778,18 @@ class QemuRunner(QEMUMachine):
         except Exception as e:
             logger.warning("failed to write instance metadata: %s", e)
 
-    def _passt_socket_path(self) -> str:
-        # Use a per-run path so a stale QEMU/passt process from an earlier
-        # failed attempt cannot connect to the new listener and make it exit.
-        name = "passt-%d.sock" % os.getpid()
-        path = os.path.join(self.instance_dir, name)
-        if len(path.encode()) >= 100:
-            path = os.path.join("/tmp", "qemu-compose-%s-%d.sock" % (str(self.vmid)[:8], os.getpid()))
-        return path
+    def _close_passt_socketpair(self) -> None:
+        pair = self.passt_socketpair
+        self.passt_socketpair = None
+        self.passt_fd = None
+        self.qemu_passt_fd = None
+        if pair is None:
+            return
+        for sock in pair:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def _passt_port_args(self) -> List[str]:
         tcp_ports: List[str] = []
@@ -804,14 +811,14 @@ class QemuRunner(QEMUMachine):
 
     def _passt_command(self) -> List[str]:
         assert self.passt_binary is not None
-        assert self.passt_socket is not None
+        assert self.passt_fd is not None
         # Keep the traditional QEMU user-network addresses so existing
         # GATEWAY_IP / cloud-init URLs and port mappings continue to work.
         return [
             self.passt_binary,
             '-f',
             '-d',
-            '-s', self.passt_socket,
+            '-F', str(self.passt_fd),
             '-a', '10.0.2.15',
             '-n', '255.255.255.0',
             '-g', '10.0.2.2',
@@ -825,13 +832,7 @@ class QemuRunner(QEMUMachine):
         if self.passt_process is not None and self.passt_process.poll() is None:
             return
 
-        assert self.passt_socket is not None
-        try:
-            if os.path.exists(self.passt_socket):
-                os.unlink(self.passt_socket)
-        except OSError as e:
-            logger.warning("failed to remove stale passt socket %s: %s", self.passt_socket, e)
-
+        assert self.passt_fd is not None
         cmd = self._passt_command()
         log_path = os.path.join(self.instance_dir, "passt.log")
         logger.info("running passt %s" % (" ".join(shlex.quote(p) for p in cmd),))
@@ -845,24 +846,22 @@ class QemuRunner(QEMUMachine):
                 stdin=subprocess.DEVNULL,
                 stdout=log_fp,
                 stderr=subprocess.STDOUT,
+                pass_fds=(self.passt_fd,),
             )
 
-        deadline = time.time() + 5.0
+        # Give passt a moment to fail on invalid options before QEMU starts.
+        deadline = time.time() + 0.5
         while time.time() < deadline:
-            if os.path.exists(self.passt_socket):
-                # The socket file appears just before listen(); give passt a
-                # moment to enter its accept loop before QEMU connects.
-                time.sleep(0.1)
-                return
             if self.passt_process.poll() is not None:
                 break
-            time.sleep(0.05)
+            time.sleep(0.02)
 
         exit_code = self.passt_process.poll()
-        self._stop_passt()
-        raise RuntimeError(
-            "passt failed to start (exit code %s); see %s" % (exit_code, log_path)
-        )
+        if exit_code is not None:
+            self._stop_passt()
+            raise RuntimeError(
+                "passt failed to start (exit code %s); see %s" % (exit_code, log_path)
+            )
 
     def _stop_passt(self) -> None:
         proc = self.passt_process
@@ -879,17 +878,21 @@ class QemuRunner(QEMUMachine):
             except Exception as e:
                 logger.debug("failed to terminate passt: %s", e)
 
-        if self.passt_socket:
-            try:
-                if os.path.exists(self.passt_socket):
-                    os.unlink(self.passt_socket)
-            except OSError as e:
-                logger.debug("failed to remove passt socket: %s", e)
+        self._close_passt_socketpair()
 
     def start(self):
         try:
             self._start_passt()
+            if self.using_passt and self.qemu_passt_fd is not None:
+                os.set_inheritable(self.qemu_passt_fd, True)
             self.launch()
+            if self.using_passt and self.passt_socketpair is not None:
+                # QEMU owns its end now; release our copy so passt sees EOF
+                # as soon as QEMU exits.
+                try:
+                    self.passt_socketpair[1].close()
+                except OSError:
+                    pass
         except Exception:
             self._stop_passt()
             raise
