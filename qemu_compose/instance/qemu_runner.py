@@ -801,6 +801,7 @@ class QemuRunner(QEMUMachine):
         return [
             self.passt_binary,
             '-f',
+            '-e',
             '-s', self.passt_socket,
             '-a', '10.0.2.15',
             '-n', '255.255.255.0',
