@@ -13,6 +13,7 @@ Bring up a qemu VM by providing a qemu-compose.yml and run `qemu-compose up`
  - support `boot_commands` for vm provisioning (implemented using tty communication, gui not supported yet, and use jsonlisp for expressive power which apparently is turing-complete)
  - support `http_serve` for cloudinit
  - env interpolation for advanced configuration
+ - automatically uses `passt` for user networking when it is installed (falls back to QEMU slirp otherwise)
 
 ## Installation
 
