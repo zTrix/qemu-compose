@@ -66,6 +66,47 @@ def extract_format_or_default(mapping: Optional[dict], key: str, env: dict, defa
     return default
 
 
+def parse_port_spec(spec: str) -> Optional[Tuple[str, str, str, str]]:
+    # Support forms:
+    #  - host_ip:host_port:vm_port
+    #  - host_port:vm_port
+    # Each of the above may be suffixed with "/tcp" or "/udp"
+    proto = 'tcp'
+    body, sep, suffix = spec.partition('/')
+    if sep:
+        proto = suffix.strip().lower() or 'tcp'
+        if proto not in ('tcp', 'udp'):
+            proto = 'tcp'
+    parts = [p.strip() for p in body.split(':')]
+    if len(parts) == 3:
+        return proto, parts[0], parts[1], parts[2]
+    if len(parts) == 2:
+        return proto, '', parts[0], parts[1]
+    return None
+
+
+def format_hostfwd(item: Tuple[str, str, str, str]) -> str:
+    proto, host_ip, host_port, vm_port = item
+    return f",hostfwd={proto}:{host_ip}:{host_port}-:{vm_port}"
+
+
+def hostfwd_segments(ports: List[str]) -> str:
+    return ''.join(
+        map(
+            format_hostfwd,
+            filter(None, map(parse_port_spec, ports))
+        )
+    )
+
+
+def format_passt_port(item: Tuple[str, str, str, str]) -> str:
+    # passt uses "[host_ip/]host_port:guest_port".
+    _proto, host_ip, host_port, vm_port = item
+    if host_ip:
+        return f"{host_ip}/{host_port}:{vm_port}"
+    return f"{host_port}:{vm_port}"
+
+
 def parse_volume_spec(spec: str) -> Optional[Tuple[str, str, bool]]:
     parts = [p.strip() for p in spec.split(':')]
     if len(parts) < 2:
@@ -183,6 +224,10 @@ class QemuRunner(QEMUMachine):
         self.image_manifest: Optional[ImageManifest] = None
         self.storage_overlays: List[DiskSpec] = []
         self.virtiofs_children: List[subprocess.Popen] = []
+        self.passt_process: Optional[subprocess.Popen] = None
+        self.passt_socket: Optional[str] = None
+        self.passt_binary: Optional[str] = None
+        self.using_passt = False
 
         if config.binary:
             binary = config.binary
@@ -504,36 +549,6 @@ class QemuRunner(QEMUMachine):
             args.append('-smbios')
             args.append('type=11,value=io.systemd.credential:system.hostname=' + hostname)
 
-        def parse_port_spec(spec: str) -> Optional[Tuple[str, str, str, str]]:
-            # Support forms:
-            #  - host_ip:host_port:vm_port
-            #  - host_port:vm_port
-            # Each of the above may be suffixed with "/tcp" or "/udp"
-            proto = 'tcp'
-            body, sep, suffix = spec.partition('/')
-            if sep:
-                proto = suffix.strip().lower() or 'tcp'
-                if proto not in ('tcp', 'udp'):
-                    proto = 'tcp'
-            parts = [p.strip() for p in body.split(':')]
-            if len(parts) == 3:
-                return proto, parts[0], parts[1], parts[2]
-            if len(parts) == 2:
-                return proto, '', parts[0], parts[1]
-            return None
-
-        def format_hostfwd(item: Tuple[str, str, str, str]) -> str:
-            proto, host_ip, host_port, vm_port = item
-            return f",hostfwd={proto}:{host_ip}:{host_port}-:{vm_port}"
-
-        def hostfwd_segments(ports: List[str]) -> str:
-            return ''.join(
-                map(
-                    format_hostfwd,
-                    filter(None, map(parse_port_spec, ports))
-                )
-            )
-
         # Bind-mount style volumes implemented via virtio-fs. Spec format:
         #   src:dst[:ro]
         # Examples:
@@ -611,14 +626,26 @@ class QemuRunner(QEMUMachine):
             return os.path.exists(path)
 
         if self.config.network is None or self.config.network.lower() == 'user':
-            # add user network
-            args.append('-netdev')
-            # https://man.archlinux.org/man/qemu.1.en#hostname=name
-            base = 'user,id=user.qemu-compose%s' % (',hostname=' + hostname if hostname else '',)
-            netdev_opts = base + hostfwd_segments(self.config.ports or [])
-            args.append(netdev_opts)
-            args.append('-device')
-            args.append('virtio-net,netdev=user.qemu-compose')
+            passt_bin = shutil.which('passt')
+            if passt_bin:
+                # passt is a drop-in replacement for QEMU's slirp user network.
+                # QEMU only sees a unix-socket netdev; passt owns the actual
+                # user-mode networking and port forwarding.
+                self.using_passt = True
+                self.passt_binary = passt_bin
+                self.passt_socket = os.path.join(self.instance_dir, "passt.sock")
+                args.append('-netdev')
+                args.append('socket,id=user.qemu-compose,connect=unix:' + self.passt_socket)
+                args.append('-device')
+                args.append('virtio-net,netdev=user.qemu-compose')
+            else:
+                args.append('-netdev')
+                # https://man.archlinux.org/man/qemu.1.en#hostname=name
+                base = 'user,id=user.qemu-compose%s' % (',hostname=' + hostname if hostname else '',)
+                netdev_opts = base + hostfwd_segments(self.config.ports or [])
+                args.append(netdev_opts)
+                args.append('-device')
+                args.append('virtio-net,netdev=user.qemu-compose')
 
         if self.cid:
             args.append("-device")
@@ -745,8 +772,108 @@ class QemuRunner(QEMUMachine):
         except Exception as e:
             logger.warning("failed to write instance metadata: %s", e)
 
+    def _passt_port_args(self) -> List[str]:
+        tcp_ports: List[str] = []
+        udp_ports: List[str] = []
+        for spec in self.config.ports or []:
+            parsed = parse_port_spec(spec)
+            if parsed is None:
+                continue
+            proto = parsed[0]
+            target = udp_ports if proto == 'udp' else tcp_ports
+            target.append(format_passt_port(parsed))
+
+        args: List[str] = []
+        for port in tcp_ports:
+            args.extend(['-t', port])
+        for port in udp_ports:
+            args.extend(['-u', port])
+        return args
+
+    def _passt_command(self) -> List[str]:
+        assert self.passt_binary is not None
+        assert self.passt_socket is not None
+        # Keep the traditional QEMU user-network addresses so existing
+        # GATEWAY_IP / cloud-init URLs and port mappings continue to work.
+        return [
+            self.passt_binary,
+            '-f',
+            '-s', self.passt_socket,
+            '-a', '10.0.2.15',
+            '-n', '255.255.255.0',
+            '-g', '10.0.2.2',
+            '-D', '10.0.2.3',
+            *self._passt_port_args(),
+        ]
+
+    def _start_passt(self) -> None:
+        if not self.using_passt:
+            return
+        if self.passt_process is not None and self.passt_process.poll() is None:
+            return
+
+        assert self.passt_socket is not None
+        try:
+            if os.path.exists(self.passt_socket):
+                os.unlink(self.passt_socket)
+        except OSError as e:
+            logger.warning("failed to remove stale passt socket %s: %s", self.passt_socket, e)
+
+        cmd = self._passt_command()
+        log_path = os.path.join(self.instance_dir, "passt.log")
+        logger.info("running passt %s" % (" ".join(shlex.quote(p) for p in cmd),))
+        logger.info("passt log path: %s", log_path)
+        with open(log_path, 'ab', buffering=0) as log_fp:
+            self.passt_process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_fp,
+                stderr=subprocess.STDOUT,
+            )
+
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if os.path.exists(self.passt_socket):
+                return
+            if self.passt_process.poll() is not None:
+                break
+            time.sleep(0.05)
+
+        exit_code = self.passt_process.poll()
+        self._stop_passt()
+        raise RuntimeError(
+            "passt failed to start (exit code %s); see %s" % (exit_code, log_path)
+        )
+
+    def _stop_passt(self) -> None:
+        proc = self.passt_process
+        self.passt_process = None
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.debug("failed to terminate passt: %s", e)
+
+        if self.passt_socket:
+            try:
+                if os.path.exists(self.passt_socket):
+                    os.unlink(self.passt_socket)
+            except OSError as e:
+                logger.debug("failed to remove passt socket: %s", e)
+
     def start(self):
-        self.launch()
+        try:
+            self._start_passt()
+            self.launch()
+        except Exception:
+            self._stop_passt()
+            raise
 
         self.term = Terminal(self.console_file, self.log_file)
 
@@ -766,6 +893,8 @@ class QemuRunner(QEMUMachine):
     def cleanup(self):
         self._load_io_log()
         logger.info('vm.process_io_log = %r' % (self.get_log(), ))
+
+        self._stop_passt()
 
         try:
             if self.lock_fd is not None:
