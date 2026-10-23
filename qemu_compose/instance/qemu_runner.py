@@ -805,13 +805,12 @@ class QemuRunner(QEMUMachine):
     def _passt_command(self) -> List[str]:
         assert self.passt_binary is not None
         assert self.passt_socket is not None
-        log_path = os.path.join(self.instance_dir, "passt.log")
         # Keep the traditional QEMU user-network addresses so existing
         # GATEWAY_IP / cloud-init URLs and port mappings continue to work.
         return [
             self.passt_binary,
             '-f',
-            '-l', log_path,
+            '-d',
             '-s', self.passt_socket,
             '-a', '10.0.2.15',
             '-n', '255.255.255.0',
@@ -835,15 +834,12 @@ class QemuRunner(QEMUMachine):
 
         cmd = self._passt_command()
         log_path = os.path.join(self.instance_dir, "passt.log")
-        console_log_path = os.path.join(self.instance_dir, "passt.console.log")
-        try:
-            if os.path.exists(log_path):
-                os.unlink(log_path)
-        except OSError as e:
-            logger.warning("failed to remove stale passt log %s: %s", log_path, e)
         logger.info("running passt %s" % (" ".join(shlex.quote(p) for p in cmd),))
         logger.info("passt log path: %s", log_path)
-        with open(console_log_path, 'wb', buffering=0) as log_fp:
+        # -d makes passt log to stderr instead of syslog/journald.  The file is
+        # opened by qemu-compose itself, so it also works if passt drops to a
+        # lower-privileged user such as nobody.
+        with open(log_path, 'wb', buffering=0) as log_fp:
             self.passt_process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,
@@ -865,8 +861,7 @@ class QemuRunner(QEMUMachine):
         exit_code = self.passt_process.poll()
         self._stop_passt()
         raise RuntimeError(
-            "passt failed to start (exit code %s); see %s and %s"
-            % (exit_code, log_path, console_log_path)
+            "passt failed to start (exit code %s); see %s" % (exit_code, log_path)
         )
 
     def _stop_passt(self) -> None:

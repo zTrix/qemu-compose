@@ -49,7 +49,8 @@ def test_passt_port_arguments_and_slirp_compatible_addresses(tmp_path, monkeypat
     assert cmd[0] == "/usr/bin/passt"
     assert cmd[cmd.index("-g") + 1] == "10.0.2.2"
     assert cmd[cmd.index("-D") + 1] == "10.0.2.3"
-    assert cmd[cmd.index("-l") + 1].endswith("passt.log")
+    assert "-d" in cmd
+    assert "-l" not in cmd
     assert "-e" not in cmd
     assert "-t" in cmd
     assert "-u" in cmd
