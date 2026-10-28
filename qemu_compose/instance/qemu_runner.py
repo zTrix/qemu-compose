@@ -856,6 +856,11 @@ class QemuRunner(QEMUMachine):
             output = output.encode("utf-8", "replace")
         return b"--vhost-user" in output
 
+    def _passt_debug_enabled(self) -> bool:
+        # Debug logging (-d) is very verbose (several GB/day), so it is opt-in.
+        value = os.environ.get("QEMU_COMPOSE_PASST_DEBUG", "").strip().lower()
+        return value in ("1", "true", "yes", "on")
+
     def _passt_enabled(self) -> bool:
         # QEMU_COMPOSE_NO_PASST is an explicit kill switch and wins over the
         # config, so operators can recover existing instances without editing
@@ -901,16 +906,18 @@ class QemuRunner(QEMUMachine):
         else:
             assert self.passt_fd is not None
             transport = ['-F', str(self.passt_fd)]
-        return [
-            self.passt_binary,
-            '-f',
-            '-d',
+
+        command = [self.passt_binary, '-f']
+        if self._passt_debug_enabled():
+            command.append('-d')
+        command.extend([
             *transport,
             '-a', '10.0.2.15',
             '-n', '255.255.255.0',
             '-g', '10.0.2.2',
             *self._passt_port_args(),
-        ]
+        ])
+        return command
 
     def _unlink_passt_vhost_socket(self) -> None:
         path = self.passt_vhost_socket
@@ -937,9 +944,9 @@ class QemuRunner(QEMUMachine):
         log_path = os.path.join(self.instance_dir, "passt.log")
         logger.info("running passt %s" % (" ".join(shlex.quote(p) for p in cmd),))
         logger.info("passt log path: %s", log_path)
-        # -d makes passt log to stderr instead of syslog/journald.  The file is
-        # opened by qemu-compose itself, so it also works if passt drops to a
-        # lower-privileged user such as nobody.
+        # -f keeps passt in the foreground so its stderr can be captured here.
+        # Debug logging (-d) is opt-in via QEMU_COMPOSE_PASST_DEBUG=1 because it
+        # can grow to several GB per day.
         with open(log_path, 'wb', buffering=0) as log_fp:
             popen_kwargs = {
                 'stdin': subprocess.DEVNULL,

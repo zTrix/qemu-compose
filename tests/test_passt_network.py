@@ -20,6 +20,7 @@ from qemu_compose.local_store import LocalStore
 def _make_runner(tmp_path, monkeypatch, *, ports=None, passt=None):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.delenv("QEMU_COMPOSE_NO_PASST", raising=False)
+    monkeypatch.delenv("QEMU_COMPOSE_PASST_DEBUG", raising=False)
     monkeypatch.setattr(qemu_runner, "prepare_ssh_key", lambda _dir, _vmid: b"key")
     store = LocalStore()
     config = QemuConfig(binary="/bin/true", name="vm1", ports=ports or [], passt=passt)
@@ -50,7 +51,7 @@ def test_passt_port_arguments_and_slirp_compatible_addresses(tmp_path, monkeypat
     assert cmd[0] == "/usr/bin/passt"
     assert cmd[cmd.index("-g") + 1] == "10.0.2.2"
     assert "-D" not in cmd
-    assert "-d" in cmd
+    assert "-d" not in cmd
     assert cmd[cmd.index("-F") + 1] == "123"
     assert "-s" not in cmd
     assert "-l" not in cmd
@@ -225,6 +226,18 @@ def test_setup_uses_vhost_user_when_passt_supports_it(tmp_path, monkeypatch):
     # vhost-user requires shared guest RAM even without virtiofs volumes.
     assert "memory-backend-memfd,id=qc-mem,size=1G,share=on" in runner._args
     assert "node,memdev=qc-mem" in runner._args
+
+
+def test_passt_debug_logging_is_opt_in(tmp_path, monkeypatch):
+    runner = _make_runner(tmp_path, monkeypatch)
+    runner.passt_binary = "/usr/bin/passt"
+    runner.passt_fd = 123
+
+    assert "-d" not in runner._passt_command()
+
+    for value in ("1", "true", "yes", "on"):
+        monkeypatch.setenv("QEMU_COMPOSE_PASST_DEBUG", value)
+        assert "-d" in runner._passt_command()
 
 
 def test_passt_command_uses_vhost_user_socket(tmp_path, monkeypatch):
