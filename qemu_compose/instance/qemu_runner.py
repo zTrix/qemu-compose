@@ -5,6 +5,7 @@ import os
 import sys
 import base64
 import fcntl
+import re
 import shlex
 import socket
 import logging
@@ -65,6 +66,51 @@ def extract_format_or_default(mapping: Optional[dict], key: str, env: dict, defa
         # FIXME: format has security issues
         return str(value).format(**env)
     return default
+
+
+_MEMORY_SIZE_RE = re.compile(r"^(?P<number>\d+(?:\.\d+)?)(?P<unit>[KkMmGgTtPpEe]?)$")
+
+
+def normalize_memory_size(value: Any) -> Optional[str]:
+    """Return the initial RAM size from a QEMU ``-m`` value.
+
+    QEMU treats a bare ``-m`` number as MiB, but ``memory-backend-*`` size
+    values are bytes unless a unit is given.  Extract the initial size from
+    both the simple and compound forms and add an explicit ``M`` for values
+    without a unit so the shared backend matches the guest RAM size.
+    """
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    size_value = None
+    for part in text.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        key, sep, val = part.partition('=')
+        if sep:
+            if key.strip().lower() == 'size':
+                size_value = val.strip()
+                break
+            continue
+        # A keyless value is QEMU's positional initial RAM size.
+        size_value = part
+        break
+
+    if not size_value:
+        return None
+
+    match = _MEMORY_SIZE_RE.fullmatch(size_value)
+    if not match:
+        return None
+
+    number = match.group('number')
+    unit = match.group('unit')
+    return f"{number}{unit or 'M'}"
 
 
 def parse_port_spec(spec: str) -> Optional[Tuple[str, str, str, str]]:
@@ -156,6 +202,10 @@ class QemuConfig:
     name: Optional[str] = None
     binary: Optional[str] = None
     network: Optional[str] = None     # could be "none", "user", etc, default set to "user" when left None
+    # None = auto (prefer passt when installed), False = force QEMU slirp.
+    # See docs/PASST_ABORT_BUG_REPORT.md: passt over QEMU's socket netdev can
+    # trigger an upstream QEMU assertion (net_fill_rstate).
+    passt: Optional[bool] = None
     image: Optional[str] = None
     instance: Optional[str] = None
     env: Dict[str, str] = field(default_factory=dict)
@@ -173,6 +223,7 @@ class QemuConfig:
             name=d.get("name"),
             binary=d.get("binary"),
             network=d.get("network"),
+            passt=d.get("passt"),
             image=d.get("image"),
             instance=d.get("instance"),
             env=d.get("env", []),
@@ -231,6 +282,8 @@ class QemuRunner(QEMUMachine):
         self.qemu_passt_fd: Optional[int] = None
         self.passt_binary: Optional[str] = None
         self.using_passt = False
+        self.passt_mode: Optional[str] = None  # "stream" or "vhost-user"
+        self.passt_vhost_socket: Optional[str] = None
 
         if config.binary:
             binary = config.binary
@@ -629,19 +682,50 @@ class QemuRunner(QEMUMachine):
             return os.path.exists(path)
 
         if self.config.network is None or self.config.network.lower() == 'user':
-            passt_bin = shutil.which('passt')
+            passt_bin = shutil.which('passt') if self._passt_enabled() else None
             if passt_bin:
                 # passt is a drop-in replacement for QEMU's slirp user network.
-                # QEMU only sees a unix-socket netdev; passt owns the actual
-                # user-mode networking and port forwarding.
+                # Prefer vhost-user when this passt build advertises it: that
+                # bypasses QEMU's net/socket.c, which can abort on a spurious
+                # EAGAIN (see docs/PASST_ABORT_BUG_REPORT.md). Older passt
+                # (e.g. Ubuntu 24.04) falls back to the stream socket mode.
                 self.using_passt = True
                 self.passt_binary = passt_bin
                 self._close_passt_socketpair()
-                self.passt_socketpair = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-                self.passt_fd = self.passt_socketpair[0].fileno()
-                self.qemu_passt_fd = self.passt_socketpair[1].fileno()
-                args.append('-netdev')
-                args.append('socket,id=user.qemu-compose,fd=%d' % self.qemu_passt_fd)
+                if self._passt_supports_vhost_user(passt_bin):
+                    self.passt_mode = 'vhost-user'
+                    self.passt_vhost_socket = os.path.join(
+                        self.instance_dir, "passt-vhost-user.sock"
+                    )
+                    logger.info(
+                        "passt: using vhost-user mode (socket %s)",
+                        self.passt_vhost_socket,
+                    )
+                    args.append('-chardev')
+                    args.append(
+                        'socket,id=qc-passt-vhost,path=%s' % self.passt_vhost_socket
+                    )
+                    args.append('-netdev')
+                    args.append(
+                        'vhost-user,id=user.qemu-compose,'
+                        'chardev=qc-passt-vhost,vhostforce=on'
+                    )
+                else:
+                    self.passt_mode = 'stream'
+                    logger.warning(
+                        "passt does not advertise --vhost-user; falling back to "
+                        "stream socket mode, which is affected by a QEMU abort bug "
+                        "(set QEMU_COMPOSE_NO_PASST=1 or passt: false to use slirp)"
+                    )
+                    self.passt_socketpair = socket.socketpair(
+                        socket.AF_UNIX, socket.SOCK_STREAM
+                    )
+                    self.passt_fd = self.passt_socketpair[0].fileno()
+                    self.qemu_passt_fd = self.passt_socketpair[1].fileno()
+                    args.append('-netdev')
+                    args.append(
+                        'socket,id=user.qemu-compose,fd=%d' % self.qemu_passt_fd
+                    )
                 args.append('-device')
                 args.append('virtio-net,netdev=user.qemu-compose')
             else:
@@ -706,17 +790,25 @@ class QemuRunner(QEMUMachine):
             ro_suffix = ',ro' if ro else ''
             fstab_entries.append(f"{tag} {dst} virtiofs defaults{ro_suffix} 0 0")
 
-        if fstab_entries:
-            # Force use of a shareable guest RAM backend with virtiofsd.
-            # Use memfd instead of /dev/shm-backed files so the VM is not capped
-            # by the tmpfs mount size of /dev/shm.
+        if fstab_entries or self.passt_mode == 'vhost-user':
+            # Force use of a shareable guest RAM backend with virtiofsd and
+            # vhost-user.  Use memfd instead of /dev/shm-backed files so the VM
+            # is not capped by the tmpfs mount size of /dev/shm.  vhost-user
+            # needs share=on even when there are no virtiofs volumes.
+            #
+            # vm_mem_size is the full -m argument (possibly a compound value
+            # containing maxmem/slots), while memory-backend wants just the
+            # initial size.  A bare -m number means MiB, but a bare backend
+            # size means bytes, so make the unit explicit here.
+            backend_mem_size = normalize_memory_size(vm_mem_size) or vm_mem_size
             args.extend([
                 "-object",
-                "memory-backend-memfd,id=qc-mem,size=%s,share=on" % vm_mem_size,
+                "memory-backend-memfd,id=qc-mem,size=%s,share=on" % backend_mem_size,
                 "-numa",
                 "node,memdev=qc-mem",
             ])
 
+        if fstab_entries:
             try:
                 fstab_str = "\n".join(fstab_entries)
                 fstab_b64 = base64.b64encode(fstab_str.encode('utf-8')).decode('ascii')
@@ -791,6 +883,51 @@ class QemuRunner(QEMUMachine):
             except OSError:
                 pass
 
+    def _passt_supports_vhost_user(self, passt_bin: str) -> bool:
+        """Return True if this passt build advertises --vhost-user.
+
+        Probe the CLI instead of hard-coding a release version: distro
+        backports make version comparisons unreliable, and passt's own -h
+        output is the authoritative capability list.
+        """
+        try:
+            proc = subprocess.run(
+                [passt_bin, "-h"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.warning("unable to probe passt vhost-user support: %s", e)
+            return False
+
+        output = proc.stdout or b""
+        if isinstance(output, str):
+            output = output.encode("utf-8", "replace")
+        return b"--vhost-user" in output
+
+    def _passt_debug_enabled(self) -> bool:
+        # Debug logging (-d) is very verbose (several GB/day), so it is opt-in.
+        value = os.environ.get("QEMU_COMPOSE_PASST_DEBUG", "").strip().lower()
+        return value in ("1", "true", "yes", "on")
+
+    def _passt_enabled(self) -> bool:
+        # QEMU_COMPOSE_NO_PASST is an explicit kill switch and wins over the
+        # config, so operators can recover existing instances without editing
+        # their stored qemu_config.json.
+        disabled = os.environ.get("QEMU_COMPOSE_NO_PASST", "").strip().lower()
+        if disabled in ("1", "true", "yes", "on"):
+            return False
+
+        value = self.config.passt
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+
     def _passt_port_args(self) -> List[str]:
         tcp_ports: List[str] = []
         udp_ports: List[str] = []
@@ -811,21 +948,39 @@ class QemuRunner(QEMUMachine):
 
     def _passt_command(self) -> List[str]:
         assert self.passt_binary is not None
-        assert self.passt_fd is not None
         # Keep the traditional QEMU user-network guest/gateway addresses so
         # GATEWAY_IP / cloud-init URLs and port mappings continue to work.
         # Do not override DNS: passt should advertise the host's real
         # resolvers instead of the old slirp-only synthetic 10.0.2.3 address.
-        return [
-            self.passt_binary,
-            '-f',
-            '-d',
-            '-F', str(self.passt_fd),
+        if self.passt_mode == 'vhost-user':
+            assert self.passt_vhost_socket is not None
+            transport = ['--vhost-user', '-s', self.passt_vhost_socket]
+        else:
+            assert self.passt_fd is not None
+            transport = ['-F', str(self.passt_fd)]
+
+        command = [self.passt_binary, '-f']
+        if self._passt_debug_enabled():
+            command.append('-d')
+        command.extend([
+            *transport,
             '-a', '10.0.2.15',
             '-n', '255.255.255.0',
             '-g', '10.0.2.2',
             *self._passt_port_args(),
-        ]
+        ])
+        return command
+
+    def _unlink_passt_vhost_socket(self) -> None:
+        path = self.passt_vhost_socket
+        if not path:
+            return
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.debug("failed to remove passt vhost-user socket %s: %s", path, e)
 
     def _start_passt(self) -> None:
         if not self.using_passt:
@@ -833,22 +988,27 @@ class QemuRunner(QEMUMachine):
         if self.passt_process is not None and self.passt_process.poll() is None:
             return
 
-        assert self.passt_fd is not None
+        if self.passt_mode == 'vhost-user':
+            # passt creates the socket itself; remove one left by a crashed run.
+            self._unlink_passt_vhost_socket()
+
         cmd = self._passt_command()
         log_path = os.path.join(self.instance_dir, "passt.log")
         logger.info("running passt %s" % (" ".join(shlex.quote(p) for p in cmd),))
         logger.info("passt log path: %s", log_path)
-        # -d makes passt log to stderr instead of syslog/journald.  The file is
-        # opened by qemu-compose itself, so it also works if passt drops to a
-        # lower-privileged user such as nobody.
+        # -f keeps passt in the foreground so its stderr can be captured here.
+        # Debug logging (-d) is opt-in via QEMU_COMPOSE_PASST_DEBUG=1 because it
+        # can grow to several GB per day.
         with open(log_path, 'wb', buffering=0) as log_fp:
-            self.passt_process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=log_fp,
-                stderr=subprocess.STDOUT,
-                pass_fds=(self.passt_fd,),
-            )
+            popen_kwargs = {
+                'stdin': subprocess.DEVNULL,
+                'stdout': log_fp,
+                'stderr': subprocess.STDOUT,
+            }
+            if self.passt_mode == 'stream':
+                assert self.passt_fd is not None
+                popen_kwargs['pass_fds'] = (self.passt_fd,)
+            self.passt_process = subprocess.Popen(cmd, **popen_kwargs)
 
         # Give passt a moment to fail on invalid options before QEMU starts.
         deadline = time.time() + 0.5
@@ -862,6 +1022,29 @@ class QemuRunner(QEMUMachine):
             self._stop_passt()
             raise RuntimeError(
                 "passt failed to start (exit code %s); see %s" % (exit_code, log_path)
+            )
+
+        if self.passt_mode == 'vhost-user':
+            assert self.passt_vhost_socket is not None
+            socket_path = self.passt_vhost_socket
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                if os.path.exists(socket_path):
+                    return
+                if self.passt_process.poll() is not None:
+                    break
+                time.sleep(0.02)
+
+            exit_code = self.passt_process.poll()
+            self._stop_passt()
+            if exit_code is not None:
+                raise RuntimeError(
+                    "passt failed to start (exit code %s); see %s"
+                    % (exit_code, log_path)
+                )
+            raise RuntimeError(
+                "passt vhost-user socket %s was not ready; see %s"
+                % (socket_path, log_path)
             )
 
     def _stop_passt(self) -> None:
@@ -880,6 +1063,7 @@ class QemuRunner(QEMUMachine):
                 logger.debug("failed to terminate passt: %s", e)
 
         self._close_passt_socketpair()
+        self._unlink_passt_vhost_socket()
 
     def start(self):
         try:
