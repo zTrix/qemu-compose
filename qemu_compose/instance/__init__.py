@@ -2,49 +2,54 @@ from typing import List
 import os
 import uuid
 
-try:
-    from Crypto.PublicKey import ECC
-except Exception:
-    from Cryptodome.PublicKey import ECC
+from qemu_compose.instance.ssh_key import (
+    _load_ecc,
+    _openssh_private_key_from_ecc,
+    _write_private_key,
+    ensure_openssh_private_key,
+    load_private_key,
+    public_key_bytes,
+)
 
-def new_random_vmid(instance_root:str) -> str:
+
+def new_random_vmid(instance_root: str) -> str:
     return uuid.uuid4().bytes.hex()
 
-def prepare_ssh_key(instance_dir:str, vmid:str) -> bytes:
+
+def prepare_ssh_key(instance_dir: str, vmid: str) -> bytes:
     priv_key_path = os.path.join(instance_dir, "ssh-key")
     pub_key_path = os.path.join(instance_dir, "ssh-key.pub")
 
-    if os.path.exists(priv_key_path) and os.path.exists(pub_key_path):
-        with open(pub_key_path, 'rb') as pf:
-            return pf.read()
+    if os.path.exists(priv_key_path):
+        # Older qemu-compose versions wrote a PKCS#8 PEM private key, which
+        # OpenSSH's "ssh -i" cannot read.  Convert it in place.
+        ensure_openssh_private_key(instance_dir)
+
+        if os.path.exists(pub_key_path):
+            with open(pub_key_path, "rb") as pf:
+                return pf.read()
+
+        # The public key file is missing; derive it from the existing key
+        # instead of replacing the pair with a new one.
+        key = load_private_key(priv_key_path)
+        pub_bytes = public_key_bytes(key, vmid)
+        with open(pub_key_path, "wb") as pf:
+            pf.write(pub_bytes)
+        return pub_bytes
 
     # create new key pair using PyCryptodome
-    key = ECC.generate(curve='ed25519')
-    priv_pem = key.export_key(format='PEM')
-    with open(priv_key_path, 'wb') as f:
-        f.write(priv_pem.encode('ascii'))
+    key = _load_ecc().generate(curve="ed25519")
+    priv_key = _openssh_private_key_from_ecc(key)
+    _write_private_key(priv_key_path, priv_key)
 
-    try:
-        os.chmod(priv_key_path, 0o600)
-    except Exception:
-        pass
-
-    pub_key = key.public_key()
-    try:
-        pub_str = pub_key.export_key(format='OpenSSH')
-    except Exception as exc:
-        raise RuntimeError("Unable to export Ed25519 public key in OpenSSH format") from exc
-
-    pub_with_comment = (pub_str.strip() + ' ' + f'qemu-compose-{vmid}\n')
-    pub_bytes = pub_with_comment.encode('utf-8')
-
-    with open(pub_key_path, 'wb') as pf:
+    pub_bytes = public_key_bytes(key, vmid)
+    with open(pub_key_path, "wb") as pf:
         pf.write(pub_bytes)
 
     return pub_bytes
 
 
-def list_instance_ids(instance_root:str) -> List[str]:
+def list_instance_ids(instance_root: str) -> List[str]:
     try:
         return sorted(
             [d for d in os.listdir(instance_root) if os.path.isdir(os.path.join(instance_root, d))]
