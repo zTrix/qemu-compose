@@ -12,8 +12,10 @@ except Exception:
     sys.modules.setdefault("Crypto", crypto_module)
     sys.modules.setdefault("Crypto.PublicKey", crypto_public_key_module)
 
+import pytest
+
 import qemu_compose.instance.qemu_runner as qemu_runner
-from qemu_compose.instance.qemu_runner import QemuConfig, QemuRunner
+from qemu_compose.instance.qemu_runner import QemuConfig, QemuRunner, normalize_memory_size
 from qemu_compose.local_store import LocalStore
 
 
@@ -255,3 +257,54 @@ def test_passt_command_uses_vhost_user_socket(tmp_path, monkeypatch):
     assert "-F" not in cmd
     assert "-t" in cmd
     assert "-u" in cmd
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2048", "2048M"),
+        ("2048M", "2048M"),
+        ("2G", "2G"),
+        ("size=2048", "2048M"),
+        ("size=2048,maxmem=4G,slots=2", "2048M"),
+        ("2048,slots=2,maxmem=4G", "2048M"),
+        ("size=2G,slots=2,maxmem=8G", "2G"),
+    ],
+)
+def test_normalize_memory_size(value, expected):
+    assert normalize_memory_size(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("memory_arg", "expected_backend_size"),
+    [
+        ("2048", "2048M"),
+        ("size=2048,maxmem=4G,slots=2", "2048M"),
+        ("2G,slots=2,maxmem=8G", "2G"),
+    ],
+)
+def test_vhost_user_backend_size_matches_initial_guest_ram(
+    tmp_path, monkeypatch, memory_arg, expected_backend_size
+):
+    runner = _make_runner(tmp_path, monkeypatch)
+    runner.config.qemu_args = [{"m": memory_arg}]
+
+    real_which = qemu_runner.shutil.which
+
+    def fake_which(name, *args, **kwargs):
+        if name == "passt":
+            return "/usr/bin/passt"
+        return real_which(name, *args, **kwargs)
+
+    monkeypatch.setattr(qemu_runner.shutil, "which", fake_which)
+    monkeypatch.setattr(
+        runner, "_passt_supports_vhost_user", lambda _passt_bin: True
+    )
+
+    runner.setup_qemu_args()
+
+    assert runner._args[runner._args.index("-m") + 1] == memory_arg
+    assert (
+        "memory-backend-memfd,id=qc-mem,size=%s,share=on"
+        % expected_backend_size
+    ) in runner._args

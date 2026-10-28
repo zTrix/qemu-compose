@@ -5,6 +5,7 @@ import os
 import sys
 import base64
 import fcntl
+import re
 import shlex
 import socket
 import logging
@@ -65,6 +66,51 @@ def extract_format_or_default(mapping: Optional[dict], key: str, env: dict, defa
         # FIXME: format has security issues
         return str(value).format(**env)
     return default
+
+
+_MEMORY_SIZE_RE = re.compile(r"^(?P<number>\d+(?:\.\d+)?)(?P<unit>[KkMmGgTtPpEe]?)$")
+
+
+def normalize_memory_size(value: Any) -> Optional[str]:
+    """Return the initial RAM size from a QEMU ``-m`` value.
+
+    QEMU treats a bare ``-m`` number as MiB, but ``memory-backend-*`` size
+    values are bytes unless a unit is given.  Extract the initial size from
+    both the simple and compound forms and add an explicit ``M`` for values
+    without a unit so the shared backend matches the guest RAM size.
+    """
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    size_value = None
+    for part in text.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        key, sep, val = part.partition('=')
+        if sep:
+            if key.strip().lower() == 'size':
+                size_value = val.strip()
+                break
+            continue
+        # A keyless value is QEMU's positional initial RAM size.
+        size_value = part
+        break
+
+    if not size_value:
+        return None
+
+    match = _MEMORY_SIZE_RE.fullmatch(size_value)
+    if not match:
+        return None
+
+    number = match.group('number')
+    unit = match.group('unit')
+    return f"{number}{unit or 'M'}"
 
 
 def parse_port_spec(spec: str) -> Optional[Tuple[str, str, str, str]]:
@@ -749,9 +795,15 @@ class QemuRunner(QEMUMachine):
             # vhost-user.  Use memfd instead of /dev/shm-backed files so the VM
             # is not capped by the tmpfs mount size of /dev/shm.  vhost-user
             # needs share=on even when there are no virtiofs volumes.
+            #
+            # vm_mem_size is the full -m argument (possibly a compound value
+            # containing maxmem/slots), while memory-backend wants just the
+            # initial size.  A bare -m number means MiB, but a bare backend
+            # size means bytes, so make the unit explicit here.
+            backend_mem_size = normalize_memory_size(vm_mem_size) or vm_mem_size
             args.extend([
                 "-object",
-                "memory-backend-memfd,id=qc-mem,size=%s,share=on" % vm_mem_size,
+                "memory-backend-memfd,id=qc-mem,size=%s,share=on" % backend_mem_size,
                 "-numa",
                 "node,memdev=qc-mem",
             ])
