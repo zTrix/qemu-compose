@@ -13,7 +13,7 @@ Bring up a qemu VM by providing a qemu-compose.yml and run `qemu-compose up`
  - support `boot_commands` for vm provisioning (implemented using tty communication, gui not supported yet, and use jsonlisp for expressive power which apparently is turing-complete)
  - support `http_serve` for cloudinit
  - env interpolation for advanced configuration
- - automatically uses `passt` for user networking when it is installed (falls back to QEMU slirp otherwise)
+ - automatically uses `passt` for user networking when it is installed (falls back to QEMU slirp otherwise); uses passt's vhost-user mode when its `-h` output advertises `--vhost-user`, otherwise the stream socket mode; disable passt entirely with `passt: false` in `qemu-compose.yml` or `QEMU_COMPOSE_NO_PASST=1` (see `docs/PASST_ABORT_BUG_REPORT.md`)
 
 ## Installation
 
