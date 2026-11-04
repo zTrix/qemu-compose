@@ -5,6 +5,7 @@ import shlex
 import sys
 from typing import List, Optional
 
+from qemu_compose.instance.ssh_key import ensure_openssh_private_key
 from qemu_compose.local_store import LocalStore
 
 
@@ -108,6 +109,12 @@ def command_ssh(*, identifier: Optional[str] = None, passthrough: Optional[List[
     key_path = os.path.join(instance_root, vmid, "ssh-key")
     if not os.path.exists(key_path):
         print("Error: instance key not found: %s" % key_path, file=sys.stderr)
+        return 1
+
+    try:
+        ensure_openssh_private_key(os.path.join(instance_root, vmid))
+    except Exception as e:
+        print(f"Error: failed to convert legacy SSH key: {e}", file=sys.stderr)
         return 1
 
     ssh_cmd, cid_val = _build_ssh_cmd(instance_root, vmid, passthrough or [])
