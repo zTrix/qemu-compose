@@ -5,6 +5,7 @@ import socket
 import threading
 
 from qemu_compose.cmd.monitor_command import _relay_monitor, command_monitor
+from qemu_compose.utils.unix_socket import unix_socket_path
 
 
 def create_instance(tmp_path, vmid="vm-12345678", name="my-vm"):
@@ -24,7 +25,7 @@ def test_monitor_resolves_name_and_connects(tmp_path, monkeypatch):
     )
 
     assert command_monitor(identifier="my-vm") == 0
-    assert connected == [str(instance_dir / "monitor.sock")]
+    assert connected == [unix_socket_path(str(instance_dir), "monitor.sock")]
 
 
 def test_monitor_uses_compose_name_when_identifier_is_omitted(tmp_path, monkeypatch):
@@ -39,7 +40,7 @@ def test_monitor_uses_compose_name_when_identifier_is_omitted(tmp_path, monkeypa
     )
 
     assert command_monitor(config_path=str(config_path)) == 0
-    assert connected == [str(instance_dir / "monitor.sock")]
+    assert connected == [unix_socket_path(str(instance_dir), "monitor.sock")]
 
 
 def test_monitor_reports_missing_socket(tmp_path, monkeypatch, capsys):
@@ -58,7 +59,8 @@ def test_monitor_reports_missing_socket(tmp_path, monkeypatch, capsys):
     )
 
     assert command_monitor(identifier="vm-123") == 1
-    assert str(instance_dir / "monitor.sock") in capsys.readouterr().err
+    expected = unix_socket_path(str(instance_dir), "monitor.sock")
+    assert expected in capsys.readouterr().err
 
 
 def test_monitor_relay_copies_input_and_output():

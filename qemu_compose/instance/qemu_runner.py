@@ -20,6 +20,7 @@ from qemu_compose.instance import prepare_ssh_key
 from qemu_compose.utils.hostnames import to_valid_hostname
 from qemu_compose.utils.vsock import get_available_guest_cid
 from qemu_compose.utils import StreamWrapper, safe_read
+from qemu_compose.utils.unix_socket import unix_socket_path
 from qemu_compose.image import ImageManifest, load_image_by_id, load_image_by_name, DiskSpec
 
 from .name import check_and_get_name
@@ -564,13 +565,15 @@ class QemuRunner(QEMUMachine):
 
         vm_mem_size = "1G"
 
+        monitor_path = unix_socket_path(self.instance_dir, "monitor.sock")
+
         default_args = {
             'cpu': 'max',
             'machine': 'type=q35,hpet=off',
             'accel': 'kvm',
             'm': vm_mem_size,
             'smp': str(os.cpu_count()),
-            'monitor': f'unix:{os.path.join(self.instance_dir, "monitor.sock")},server=on,wait=off',
+            'monitor': f'unix:{monitor_path},server=on,wait=off',
         }
 
         # image provided args override our defaults
@@ -625,11 +628,18 @@ class QemuRunner(QEMUMachine):
         #   /host/path:/mnt/data
         #   /host/path:/mnt/readonly:ro
         def volume_tag_for(dst: str, idx: int) -> str:
-            base = os.path.basename(dst) or f"vol{idx}"
-            sanitized = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in base)
-            return f"{sanitized}-{idx}"
+            # virtio-fs limits the mount tag to 36 bytes (VIRTIO_FS_TAG_LEN).
+            # Keeping it short also keeps the resulting socket name small.
+            base = os.path.basename(dst) or "vol"
+            sanitized = ''.join(
+                ch if ch.isascii() and (ch.isalnum() or ch in ('-', '_')) else '_'
+                for ch in base
+            )
+            suffix = f"-{idx}"
+            sanitized = sanitized[:max(1, 36 - len(suffix))]
+            return f"{sanitized}{suffix}"
 
-        def start_virtiofsd(shared_dir: str, socket_path: str, read_only: bool) -> Optional[subprocess.Popen]:
+        def start_virtiofsd(shared_dir: str, socket_path: str, log_path: str, read_only: bool) -> Optional[subprocess.Popen]:
             unshare_bin = shutil.which('unshare')
 
             if os.getuid() != 0 and unshare_bin is None:
@@ -671,7 +681,6 @@ class QemuRunner(QEMUMachine):
             if read_only:
                 cmd.append('--readonly')
             try:
-                log_path = os.path.splitext(socket_path)[0] + '.log'
                 logger.info("running virtiofsd %s" % (" ".join(shlex.quote(p) for p in cmd), ))
                 logger.info("virtiofsd log path: %s", log_path)
                 with open(log_path, 'ab', buffering=0) as log_fp:
@@ -708,7 +717,7 @@ class QemuRunner(QEMUMachine):
                 self._close_passt_socketpair()
                 if self._passt_supports_vhost_user(passt_bin):
                     self.passt_mode = 'vhost-user'
-                    self.passt_vhost_socket = os.path.join(
+                    self.passt_vhost_socket = unix_socket_path(
                         self.instance_dir, "passt-vhost-user.sock"
                     )
                     logger.info(
@@ -781,8 +790,16 @@ class QemuRunner(QEMUMachine):
                 continue
             src, dst, ro = parsed
             tag = volume_tag_for(dst, i)
-            socket_path = os.path.join(self.instance_dir, f"virtiofs-{tag}.sock")
-            child = start_virtiofsd(src, socket_path, ro)
+            socket_path = unix_socket_path(
+                self.instance_dir, f"virtiofs-{tag}.sock"
+            )
+            if socket_path != os.path.join(self.instance_dir, f"virtiofs-{tag}.sock"):
+                logger.info(
+                    "volume '%s' socket path is too long for AF_UNIX; using %s",
+                    src, socket_path,
+                )
+            log_path = os.path.join(self.instance_dir, f"virtiofs-{tag}.log")
+            child = start_virtiofsd(src, socket_path, log_path, ro)
             if child is None:
                 continue
 

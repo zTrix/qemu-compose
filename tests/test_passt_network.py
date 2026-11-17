@@ -17,6 +17,7 @@ import pytest
 import qemu_compose.instance.qemu_runner as qemu_runner
 from qemu_compose.instance.qemu_runner import QemuConfig, QemuRunner, normalize_memory_size
 from qemu_compose.local_store import LocalStore
+from qemu_compose.utils.unix_socket import unix_socket_path
 
 
 def _make_runner(tmp_path, monkeypatch, *, ports=None, passt=None):
@@ -212,8 +213,9 @@ def test_setup_uses_vhost_user_when_passt_supports_it(tmp_path, monkeypatch):
     assert runner.using_passt is True
     assert runner.passt_mode == "vhost-user"
     assert runner.passt_socketpair is None
-    assert runner.passt_vhost_socket == str(
-        tmp_path / "qemu-compose" / "instance" / "abc12345" / "passt-vhost-user.sock"
+    assert runner.passt_vhost_socket == unix_socket_path(
+        str(tmp_path / "qemu-compose" / "instance" / "abc12345"),
+        "passt-vhost-user.sock",
     )
 
     # vhost-user bypasses QEMU's net/socket.c entirely.
