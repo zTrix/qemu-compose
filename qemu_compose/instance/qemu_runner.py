@@ -629,6 +629,7 @@ class QemuRunner(QEMUMachine):
         #   /host/path:/mnt/readonly:ro
         def volume_tag_for(dst: str, idx: int) -> str:
             # virtio-fs limits the mount tag to 36 bytes (VIRTIO_FS_TAG_LEN).
+            # and SUN_PATH_MAX = 108, so we'd like to make it as small as possible
             # Keeping it short also keeps the resulting socket name small.
             base = os.path.basename(dst) or "vol"
             sanitized = ''.join(
@@ -636,7 +637,7 @@ class QemuRunner(QEMUMachine):
                 for ch in base
             )
             suffix = f"-{idx}"
-            sanitized = sanitized[:max(1, 36 - len(suffix))]
+            sanitized = sanitized[:max(1, 10 - len(suffix))]
             return f"{sanitized}{suffix}"
 
         def start_virtiofsd(shared_dir: str, socket_path: str, log_path: str, read_only: bool) -> Optional[subprocess.Popen]:
