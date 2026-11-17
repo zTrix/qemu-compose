@@ -215,6 +215,29 @@ def test_manifest_disables_encrypt_hook(tmp_path):
     assert "disablehooks=encrypt" in manifest["qemu_args"][append_idx]
 
 
+def test_manifest_passes_guest_discards_to_host(tmp_path):
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+
+    write_import_manifest(
+        image_dir,
+        image_id="abc123",
+        digest="sha256:abc123",
+        image="alpine:3.20",
+        metadata={
+            "config": {
+                "architecture": "amd64",
+                "os": "linux",
+                "created": "2026-05-06T00:00:00Z",
+            }
+        },
+        boot_mode=BOOT_CONTAINER,
+    )
+
+    manifest = json.loads((image_dir / "manifest.json").read_text())
+    assert "discard=unmap" in manifest["disks"][0][2]
+
+
 def test_systemd_manifest_boots_systemd(tmp_path):
     image_dir = tmp_path / "image"
     image_dir.mkdir()

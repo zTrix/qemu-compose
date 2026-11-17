@@ -48,6 +48,15 @@ def create_overlay(base_path: str, base_format: str, overlay_path: str) -> int:
         print("Error: 'qemu-img' binary not found in PATH", file=sys.stderr, flush=True)
         return 127
 
+
+def _has_drive_option(opts: Optional[str], key: str) -> bool:
+    """Return True if a comma-separated -drive option string sets ``key``."""
+    for part in (opts or "").split(','):
+        if part.split('=', 1)[0].strip() == key:
+            return True
+    return False
+
+
 def drive_param_for(overlay_path: str, spec: DiskSpec) -> str:
     # Build a '-drive' parameter string combining manifest opts with required pieces.
     opts = []
@@ -57,6 +66,11 @@ def drive_param_for(overlay_path: str, spec: DiskSpec) -> str:
         opts.append("format=" + spec.format)
     if spec.opts:
         opts.append(spec.opts)
+    # QEMU ignores guest discard/TRIM requests by default, so qcow2 overlays only
+    # grow and never give space back to the host.  Pass discards through unless
+    # the manifest explicitly chose a different discard policy.
+    if not _has_drive_option(spec.opts, "discard"):
+        opts.append("discard=unmap")
     return ",".join(opts)
 
 

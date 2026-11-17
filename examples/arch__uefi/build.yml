@@ -14,7 +14,7 @@ qemu_args:
     smp: '2'
     m: 4G
     bios: /usr/share/ovmf/x64/OVMF.4m.fd    # enable UEFI bios
-  - drive: file={CWD}/{target},if=virtio,cache=writeback,discard=ignore,format=qcow2
+  - drive: file={CWD}/{target},if=virtio,cache=writeback,discard=unmap,format=qcow2
   - drive: media=cdrom,file={CWD}/archlinux-2025.06.01-x86_64.iso,readonly=on
   - boot: once=d
   - netdev: user,id=user.0,hostfwd=tcp:127.0.0.1:7022-:22
