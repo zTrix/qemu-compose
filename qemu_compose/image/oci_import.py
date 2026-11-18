@@ -937,7 +937,9 @@ def write_manifest(
         "os": str(config.get("os") or "linux"),
         "created": created_timestamp(config),
         "repo_tags": [normalize_repo_tag(image)],
-        "disks": [["disk.qcow2", "qcow2", "if=virtio"]],
+        # discard=unmap lets guest fstrim/btrfs discard reclaim space in the
+        # instance's qcow2 overlay on the host.
+        "disks": [["disk.qcow2", "qcow2", "if=virtio,discard=unmap"]],
         "qemu_args": [
             "-kernel",
             "{IMAGE_DIR}/boot/vmlinuz",

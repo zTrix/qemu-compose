@@ -12,6 +12,7 @@ from qemu_compose.cmd.ssh_command import (
     _resolve_identifier_with_prefix,
 )
 from qemu_compose.local_store import LocalStore
+from qemu_compose.utils.unix_socket import unix_socket_path
 
 
 async def _read_input(input_stream: BinaryIO) -> bytes:
@@ -176,7 +177,7 @@ def command_monitor(
         print(f"Error: identifier '{identifier}' is ambiguous; matches: {preview}{more}", file=sys.stderr)
         return 1
 
-    socket_path = os.path.join(instance_root, vmid, "monitor.sock")
+    socket_path = unix_socket_path(os.path.join(instance_root, vmid), "monitor.sock")
     try:
         _connect_monitor(socket_path)
     except FileNotFoundError:

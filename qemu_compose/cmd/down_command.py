@@ -9,6 +9,7 @@ import logging
 
 from qemu_compose.local_store import LocalStore
 from qemu_compose.utils import safe_read
+from qemu_compose.utils.unix_socket import cleanup_unix_socket_dir
 
 logger = logging.getLogger("qemu-compose.cmd.down_command")
 
@@ -165,6 +166,7 @@ def command_down(
 
     try:
         shutil.rmtree(instance_dir)
+        cleanup_unix_socket_dir(instance_dir)
         print(f"Removed instance {instance_label(vmid, name)}", flush=True)
     except PermissionError as e:
         print(f"Error: permission denied removing instance directory: {e}", file=sys.stderr)
