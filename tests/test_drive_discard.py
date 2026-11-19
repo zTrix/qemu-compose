@@ -14,26 +14,26 @@ except Exception:
     sys.modules.setdefault("Crypto.PublicKey", crypto_public_key_module)
 
 
-def _stub_posix_module(name: str) -> None:
-    if name in sys.modules:
-        return
-    try:
-        __import__(name)
-    except ModuleNotFoundError:
-        sys.modules[name] = types.ModuleType(name)
-
-
 # qemu_runner imports POSIX-only modules at import time.
-for _posix_name in ("fcntl", "resource", "pty"):
-    _stub_posix_module(_posix_name)
-if "termios" not in sys.modules:
-    try:
-        import termios as _termios  # noqa: F401
-    except ModuleNotFoundError:
-        _termios_stub = types.ModuleType("termios")
-        # tty.setraw() evaluates TCSAFLUSH when the function is defined.
-        _termios_stub.TCSAFLUSH = 0
-        sys.modules["termios"] = _termios_stub
+try:
+    import fcntl  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["fcntl"] = types.ModuleType("fcntl")
+try:
+    import resource  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["resource"] = types.ModuleType("resource")
+try:
+    import pty  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["pty"] = types.ModuleType("pty")
+try:
+    import termios  # noqa: F401
+except ModuleNotFoundError:
+    # tty.setraw() evaluates TCSAFLUSH when the function is defined.
+    _termios_stub = types.ModuleType("termios")
+    _termios_stub.TCSAFLUSH = 0
+    sys.modules["termios"] = _termios_stub
 
 from qemu_compose.image import DiskSpec
 from qemu_compose.instance.qemu_runner import _has_drive_option, drive_param_for
