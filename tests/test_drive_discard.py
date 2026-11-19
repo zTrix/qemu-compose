@@ -13,8 +13,30 @@ except Exception:
     sys.modules.setdefault("Crypto", crypto_module)
     sys.modules.setdefault("Crypto.PublicKey", crypto_public_key_module)
 
+
+# qemu_runner imports POSIX-only modules at import time.
+try:
+    import fcntl  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["fcntl"] = types.ModuleType("fcntl")
+try:
+    import resource  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["resource"] = types.ModuleType("resource")
+try:
+    import pty  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["pty"] = types.ModuleType("pty")
+try:
+    import termios  # noqa: F401
+except ModuleNotFoundError:
+    # tty.setraw() evaluates TCSAFLUSH when the function is defined.
+    _termios_stub = types.ModuleType("termios")
+    _termios_stub.TCSAFLUSH = 0
+    sys.modules["termios"] = _termios_stub
+
 from qemu_compose.image import DiskSpec
-from qemu_compose.instance.qemu_runner import drive_param_for
+from qemu_compose.instance.qemu_runner import _has_drive_option, drive_param_for
 
 
 def parse_drive(param: str) -> dict[str, str]:
@@ -52,3 +74,38 @@ def test_drive_keeps_explicit_discard_policy():
 
     assert param.count("discard=") == 1
     assert parse_drive(param)["discard"] == "ignore"
+
+
+def test_drive_keeps_explicit_discard_unmap():
+    spec = DiskSpec(
+        filename="disk.qcow2",
+        format="qcow2",
+        opts="if=virtio,discard=unmap",
+    )
+
+    param = drive_param_for("/tmp/disk.qcow2", spec)
+
+    assert param.count("discard=") == 1
+    assert parse_drive(param)["discard"] == "unmap"
+
+
+def test_escaped_comma_in_value_is_not_a_discard_option():
+    # QEMU encodes a comma inside a value as ",,". This serial value is
+    # "vm,discard=ignore", not a discard option.
+    opts = "if=virtio,serial=vm,,discard=ignore"
+    spec = DiskSpec(filename="disk.qcow2", format="qcow2", opts=opts)
+
+    assert _has_drive_option(opts, "discard") is False
+    assert drive_param_for("/tmp/disk.qcow2", spec) == (
+        "file=/tmp/disk.qcow2,format=qcow2,if=virtio,serial=vm,,discard=ignore,discard=unmap"
+    )
+
+
+def test_explicit_discard_after_escaped_comma_is_kept():
+    opts = "if=virtio,serial=vm,,name,discard=ignore"
+    spec = DiskSpec(filename="disk.qcow2", format="qcow2", opts=opts)
+
+    assert _has_drive_option(opts, "discard") is True
+    param = drive_param_for("/tmp/disk.qcow2", spec)
+    assert param.count("discard=") == 1
+    assert param.endswith(",discard=ignore")

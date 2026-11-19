@@ -50,10 +50,31 @@ def create_overlay(base_path: str, base_format: str, overlay_path: str) -> int:
         return 127
 
 
+def _split_qemu_opts(opts: str) -> List[str]:
+    """Split a QEMU option string on commas. ``,,`` is a literal comma, not a separator."""
+    parts: List[str] = []
+    buf: List[str] = []
+    i = 0
+    while i < len(opts):
+        if opts[i] == "," and i + 1 < len(opts) and opts[i + 1] == ",":
+            buf.append(",")
+            i += 2
+            continue
+        if opts[i] == ",":
+            parts.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(opts[i])
+        i += 1
+    parts.append("".join(buf))
+    return parts
+
+
 def _has_drive_option(opts: Optional[str], key: str) -> bool:
-    """Return True if a comma-separated -drive option string sets ``key``."""
-    for part in (opts or "").split(','):
-        if part.split('=', 1)[0].strip() == key:
+    """Return True if a -drive option string sets ``key``."""
+    for part in _split_qemu_opts(opts or ""):
+        if part.split("=", 1)[0].strip() == key:
             return True
     return False
 
